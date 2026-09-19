@@ -1,0 +1,39 @@
+{
+  "name": "lakshmibala-clothing-store",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "seed": "node scripts/seed.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1124.0",
+    "@aws-sdk/s3-request-presigner": "^3.1123.0",
+    "bcryptjs": "2.4.3",
+    "cloudinary": "^2.11.0",
+    "dotenv": "^16.4.5",
+    "jsonwebtoken": "9.0.2",
+    "lucide-react": "0.414.0",
+    "mongoose": "^8.5.1",
+    "next": "^14.2.35",
+    "papaparse": "5.4.1",
+    "razorpay": "2.9.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-hot-toast": "2.4.1",
+    "recharts": "2.12.7",
+    "sharp": "^0.35.4",
+    "slugify": "1.6.6",
+    "swr": "2.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.0.1",
+    "@types/react": "19.2.17",
+    "autoprefixer": "10.4.19",
+    "postcss": "8.4.40",
+    "tailwindcss": "3.4.7",
+    "typescript": "6.0.3"
+  }
+}

@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: 'Playfair Display', serif;
+  --font-body: 'Poppins', sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: #FFF8F0;
+  color: #2B2024;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: #E91E8C55;
+  border-radius: 10px;
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+.btn-primary {
+  background: linear-gradient(135deg, #E91E8C, #C2185B);
+  color: white;
+  font-weight: 600;
+  border-radius: 9999px;
+  padding: 0.7rem 1.6rem;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 8px 20px -6px rgba(194,24,91,0.45);
+}
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 24px -6px rgba(194,24,91,0.55); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.btn-outline {
+  border: 1.5px solid #E91E8C;
+  color: #C2185B;
+  font-weight: 600;
+  border-radius: 9999px;
+  padding: 0.65rem 1.5rem;
+  background: white;
+}
+
+.btn-green {
+  background: linear-gradient(135deg, #8BC34A, #5C9A2A);
+  color: white;
+  font-weight: 600;
+  border-radius: 9999px;
+  padding: 0.7rem 1.6rem;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  color: #C2185B;
+  font-weight: 700;
+}
+
+.card-soft {
+  background: white;
+  border-radius: 1.25rem;
+  box-shadow: 0 8px 30px -10px rgba(194,24,91,0.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
