@@ -1,25 +1,53 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { Loader2, Upload, X, ArrowLeft } from 'lucide-react';
 
-const SIZE_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'Free Size','32','34','36','38','40','75','80','85','90','95','100'];
+const SIZE_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'Free Size', '32', '34', '36', '38', '40', '75', '80', '85', '90', '95', '100'];
 const GROUP_OPTIONS = [
   { value: 1, label: '1 image = 1 product' },
   { value: 2, label: '2 images = 1 product' },
   { value: 3, label: '3 images = 1 product' },
 ];
 
-// One entry per selected file: tracks local preview, upload progress, and the
-// final R2 url once uploaded.
+// Must match ALLOWED_TYPES in /api/upload/presign
+const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB per image
+const UPLOAD_CONCURRENCY = 3;
+
+// One entry per selected file: tracks local preview, upload state, and the
+// final Cloudinary url once uploaded.
 function useImageQueue() {
   const [items, setItems] = useState([]); // { id, file, previewUrl, url, uploading, error }
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  // Free blob URLs when leaving the page
+  useEffect(() => {
+    return () => {
+      itemsRef.current.forEach((i) => URL.revokeObjectURL(i.previewUrl));
+    };
+  }, []);
 
   function addFiles(fileList) {
     const files = Array.from(fileList);
-    const newItems = files.map((file) => ({
+    const valid = [];
+
+    for (const file of files) {
+      if (!ACCEPTED_TYPES.includes(file.type)) {
+        toast.error(`${file.name}: only JPG, PNG or WebP images are supported`);
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast.error(`${file.name}: larger than ${MAX_IMAGE_BYTES / (1024 * 1024)}MB`);
+        continue;
+      }
+      valid.push(file);
+    }
+
+    const newItems = valid.map((file) => ({
       id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
       file,
       previewUrl: URL.createObjectURL(file),
@@ -27,19 +55,22 @@ function useImageQueue() {
       uploading: false,
       error: '',
     }));
-    setItems((prev) => [...prev, ...newItems]);
-    return newItems;
+    if (newItems.length) setItems((prev) => [...prev, ...newItems]);
   }
 
   function removeItem(id) {
-    setItems((prev) => prev.filter((i) => i.id !== id));
+    setItems((prev) => {
+      const target = prev.find((i) => i.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((i) => i.id !== id);
+    });
   }
 
   function updateItem(id, patch) {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
   }
 
-  return { items, addFiles, removeItem, updateItem, setItems };
+  return { items, addFiles, removeItem, updateItem };
 }
 
 export default function BulkUploadPage() {
@@ -69,7 +100,10 @@ export default function BulkUploadPage() {
   const [sizes, setSizes] = useState([{ size: 'M', stock: 0, sku: '' }]);
 
   useEffect(() => {
-    fetch('/api/categories').then((r) => r.json()).then((d) => setCategories(d.categories || []));
+    fetch('/api/categories')
+      .then((r) => r.json())
+      .then((d) => setCategories(d.categories || []))
+      .catch(() => toast.error('Could not load categories'));
   }, []);
 
   function updateCommon(field, value) {
@@ -77,10 +111,18 @@ export default function BulkUploadPage() {
   }
 
   function updateSize(idx, field, value) {
-    setSizes((s) => { const next = [...s]; next[idx] = { ...next[idx], [field]: value }; return next; });
+    setSizes((s) => {
+      const next = [...s];
+      next[idx] = { ...next[idx], [field]: value };
+      return next;
+    });
   }
-  function addSize() { setSizes((s) => [...s, { size: 'L', stock: 0, sku: '' }]); }
-  function removeSize(idx) { setSizes((s) => s.filter((_, i) => i !== idx)); }
+  function addSize() {
+    setSizes((s) => [...s, { size: 'L', stock: 0, sku: '' }]);
+  }
+  function removeSize(idx) {
+    setSizes((s) => s.filter((_, i) => i !== idx));
+  }
 
   // Groups images in selection order, groupSize at a time.
   const groups = useMemo(() => {
@@ -91,36 +133,79 @@ export default function BulkUploadPage() {
     return chunks;
   }, [items, groupSize]);
 
+  const hasIncompleteGroup = items.length > 0 && items.length % groupSize !== 0;
+
+  // Uploads straight from the browser to Cloudinary using a signed payload from
+  // /api/upload/presign. This avoids the ~4.5MB serverless body limit.
+  // Returns the final secure_url so callers never depend on React state.
   async function uploadOne(item) {
     updateItem(item.id, { uploading: true, error: '' });
     try {
+      const presignRes = await fetch('/api/upload/presign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: item.file.name,
+          contentType: item.file.type,
+          contentLength: item.file.size,
+          folder: 'uploads',
+        }),
+      });
+      const presign = await presignRes.json();
+      if (!presignRes.ok) throw new Error(presign.error || 'Could not start upload');
+
       const fd = new FormData();
-      fd.append('file', item.file);
-      const res = await fetch('/api/upload', { method: 'POST', body: fd });
+      Object.entries(presign.fields).forEach(([k, v]) => fd.append(k, v));
+      fd.append('file', item.file); // file must be appended last
+
+      const res = await fetch(presign.uploadUrl, { method: 'POST', body: fd });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Upload failed');
-      updateItem(item.id, { uploading: false, url: data.url });
-      return data.url;
+      if (!res.ok || !data.secure_url) {
+        throw new Error(data?.error?.message || 'Upload failed');
+      }
+
+      updateItem(item.id, { uploading: false, url: data.secure_url });
+      return data.secure_url;
     } catch (err) {
       updateItem(item.id, { uploading: false, error: err.message });
       throw err;
     }
   }
 
+  // Uploads every image that has no url yet (including previously failed ones)
+  // and returns a local id -> url map. Using this map instead of `item.url`
+  // avoids the stale-closure problem: `items` inside handleSubmit is a snapshot
+  // from before the uploads finished.
   async function uploadAllPending() {
+    const urlById = {};
+    items.forEach((i) => {
+      if (i.url) urlById[i.id] = i.url;
+    });
+
     const pending = items.filter((i) => !i.url);
-    if (!pending.length) return true;
+    if (!pending.length) return { ok: true, urlById };
+
     setUploadingAll(true);
     let ok = true;
-    for (const item of pending) {
-      try {
-        await uploadOne(item);
-      } catch {
-        ok = false;
+    let cursor = 0;
+
+    async function worker() {
+      while (cursor < pending.length) {
+        const item = pending[cursor++];
+        try {
+          urlById[item.id] = await uploadOne(item);
+        } catch {
+          ok = false;
+        }
       }
     }
+
+    await Promise.all(
+      Array.from({ length: Math.min(UPLOAD_CONCURRENCY, pending.length) }, worker)
+    );
+
     setUploadingAll(false);
-    return ok;
+    return { ok, urlById };
   }
 
   async function handleSubmit() {
@@ -129,21 +214,18 @@ export default function BulkUploadPage() {
     if (!common.category) return toast.error('Select a category');
     if (!common.price) return toast.error('Enter a price');
 
-    const allUploaded = await uploadAllPending();
-    if (!allUploaded) {
-      toast.error('Some images failed to upload — remove or retry them first');
+    const { ok, urlById } = await uploadAllPending();
+    if (!ok) {
+      toast.error('Some images failed to upload. Hover over "Failed" for the reason, then retry or remove them.');
       return;
     }
 
-    // Re-read latest urls after upload
-    const currentGroups = [];
-    for (let i = 0; i < items.length; i += groupSize) {
-      currentGroups.push(items.slice(i, i + groupSize));
-    }
-
     const tags = common.tags.split(',').map((t) => t.trim()).filter(Boolean);
-    const products = currentGroups.map((group, idx) => ({
-      name: currentGroups.length > 1 ? `${common.name} ${idx + 1}` : common.name,
+
+    // `groups` is derived from `items` in selection order, so it matches what
+    // was uploaded. URLs come from the local map, not from item.url.
+    const products = groups.map((group, idx) => ({
+      name: groups.length > 1 ? `${common.name} ${idx + 1}` : common.name,
       description: common.description,
       category: common.category,
       fabric: common.fabric,
@@ -156,13 +238,19 @@ export default function BulkUploadPage() {
       variants: [
         {
           color: common.color || '',
-          images: group.map((i) => i.url).filter(Boolean),
+          images: group.map((i) => urlById[i.id]).filter(Boolean),
           price: Number(common.price),
           compareAtPrice: Number(common.compareAtPrice) || 0,
           sizes: sizes.map((s) => ({ ...s, stock: Number(s.stock) || 0 })),
         },
       ],
     }));
+
+    // Safety net: never send a product without images
+    if (products.some((p) => !p.variants[0].images.length)) {
+      toast.error('An image URL is missing. Please retry the upload.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -174,7 +262,9 @@ export default function BulkUploadPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Bulk create failed');
 
-      if (data.createdCount) toast.success(`Created ${data.createdCount} product${data.createdCount > 1 ? 's' : ''}`);
+      if (data.createdCount) {
+        toast.success(`Created ${data.createdCount} product${data.createdCount > 1 ? 's' : ''}`);
+      }
       if (data.errors?.length) {
         data.errors.forEach((e) => toast.error(`Product ${e.index + 1} (${e.name || 'unnamed'}): ${e.error}`));
       }
@@ -289,6 +379,11 @@ export default function BulkUploadPage() {
         <p className="text-xs text-brand-ink/40 mt-2">
           Images are grouped in the order you select them below. With {items.length} image{items.length === 1 ? '' : 's'} selected and a group size of {groupSize}, this will create <strong>{groups.length || 0}</strong> product{groups.length === 1 ? '' : 's'}.
         </p>
+        {hasIncompleteGroup && (
+          <p className="text-xs text-amber-600 mt-1">
+            The last product will have fewer than {groupSize} images.
+          </p>
+        )}
       </div>
 
       {/* Image selection */}
@@ -297,7 +392,16 @@ export default function BulkUploadPage() {
           <p className="text-sm font-medium">Images</p>
           <label className="btn-outline text-sm flex items-center gap-1 cursor-pointer">
             <Upload size={16} /> Select Images
-            <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => e.target.files?.length && addFiles(e.target.files)} />
+            <input
+              type="file"
+              accept={ACCEPTED_TYPES.join(',')}
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) addFiles(e.target.files);
+                e.target.value = ''; // allow re-selecting the same file
+              }}
+            />
           </label>
         </div>
 
@@ -320,13 +424,19 @@ export default function BulkUploadPage() {
                   {item.url && !item.uploading && (
                     <span className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-brand-green/80 text-white">Uploaded</span>
                   )}
-                  {item.error && (
-                    <span className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-red-500/90 text-white">Failed</span>
+                  {item.error && !item.uploading && (
+                    <span
+                      title={item.error}
+                      className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-red-500/90 text-white cursor-help"
+                    >
+                      Failed
+                    </span>
                   )}
                   <button
                     type="button"
+                    disabled={busy}
                     onClick={() => removeItem(item.id)}
-                    className="absolute top-0.5 right-0.5 bg-black/50 text-white rounded-full p-0.5"
+                    className="absolute top-0.5 right-0.5 bg-black/50 text-white rounded-full p-0.5 disabled:opacity-40"
                   >
                     <X size={12} />
                   </button>

@@ -72,7 +72,7 @@ export default function AdminShell({ admin, children }) {
       <div className="flex-1 min-w-0">
         <header className="lg:hidden sticky top-0 z-30 bg-white border-b border-brand-pink/10 px-4 py-3 flex items-center gap-3">
           <button onClick={() => setOpen(true)}><Menu size={22} /></button>
-          <span className="font-display font-bold text-brand-magenta">LB Admin</span>
+          <span className="font-display font-bold text-brand-magenta">Kavyajeni Fashion Admin</span>
         </header>
         <main className="p-4 sm:p-6 max-w-6xl">{children}</main>
       </div>

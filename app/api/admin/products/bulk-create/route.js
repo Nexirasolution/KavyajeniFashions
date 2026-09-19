@@ -31,9 +31,26 @@ export const POST = requireAdmin(async (req) => {
     try {
       if (!p.name) throw new Error('Missing name');
       if (!p.category) throw new Error('Missing category');
-      if (!p.variants?.length) throw new Error('Missing variants/images');
+      if (!p.variants?.length) throw new Error('Missing variants');
 
-      const basePrice = Math.min(...p.variants.map((v) => Number(v.price) || 0));
+      // Clean each variant's images and make sure none are empty
+      const variants = p.variants.map((v) => ({
+        color: v.color || '',
+        colorHex: v.colorHex || '#000000',
+        images: (v.images || []).filter((img) => typeof img === 'string' && img.trim()),
+        price: Number(v.price),
+        compareAtPrice: Number(v.compareAtPrice) || 0,
+        sizes: (v.sizes || []).map((s) => ({ ...s, stock: Number(s.stock) || 0 })),
+      }));
+
+      if (variants.some((v) => !v.images.length)) {
+        throw new Error('Missing images');
+      }
+      if (variants.some((v) => !Number.isFinite(v.price) || v.price <= 0)) {
+        throw new Error('Invalid price');
+      }
+
+      const basePrice = Math.min(...variants.map((v) => v.price));
 
       const baseSlug = slugify(p.name);
       let candidate = baseSlug;
@@ -47,19 +64,12 @@ export const POST = requireAdmin(async (req) => {
         ...p,
         slug: candidate,
         basePrice,
-        variants: p.variants.map((v) => ({
-          color: v.color || '',
-          colorHex: v.colorHex || '#000000',
-          images: (v.images || []).filter(Boolean),
-          price: Number(v.price),
-          compareAtPrice: Number(v.compareAtPrice) || 0,
-          sizes: (v.sizes || []).map((s) => ({ ...s, stock: Number(s.stock) || 0 })),
-        })),
+        variants,
       });
 
       created.push({ id: doc._id, name: doc.name, slug: doc.slug });
     } catch (err) {
-      errors.push({ index: i, name: p.name, error: err.message });
+      errors.push({ index: i, name: p?.name, error: err.message });
     }
   }
 
