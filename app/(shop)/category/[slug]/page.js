@@ -1,15 +1,24 @@
 'use client';
 
+// Location: app/category/[slug]/page.js
+
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import ProductCard from '@/components/ProductCard';
 import Filters from '@/components/Filters';
 
-const PAGE_SIZE = 12;
+const PAGE_SIZE = 100;
 
+// The key={slug} remounts the inner component whenever the category changes,
+// so page/sort/products all reset automatically (no separate "reset page" effect,
+// and therefore no double fetch).
 export default function CategoryPage() {
   const { slug } = useParams();
+  return <CategoryContent key={slug} slug={slug} />;
+}
+
+function CategoryContent({ slug }) {
   const [category, setCategory] = useState(null);
   const [subcategories, setSubcategories] = useState([]);
   const [products, setProducts] = useState([]);
@@ -20,50 +29,58 @@ export default function CategoryPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const catRes = await fetch(`/api/categories/${slug}`);
-    const catData = await catRes.json();
-    setCategory(catData.category);
-    const subs = catData.subcategories || [];
-    setSubcategories(subs);
+    try {
+      const catRes = await fetch(`/api/categories/${slug}`);
+      const catData = await catRes.json();
+      setCategory(catData.category);
+      const subs = catData.subcategories || [];
+      setSubcategories(subs);
 
-    // Only load products when this category has NO subcategories.
-    // If it has subcategories, the user must drill into one to see products.
-    if (subs.length === 0) {
-      const params = new URLSearchParams({
-        category: slug,
-        sort,
-        page: String(page),
-        limit: String(PAGE_SIZE),
-      });
+      // Only load products when this category has NO subcategories.
+      // If it has subcategories, the user must drill into one to see products.
+      if (subs.length === 0) {
+        const params = new URLSearchParams({
+          category: slug,
+          sort,
+          page: String(page),
+          limit: String(PAGE_SIZE),
+        });
 
-      const res = await fetch(`/api/products?${params.toString()}`);
-      const data = await res.json();
-      setProducts(data.products || []);
+        const res = await fetch(`/api/products?${params.toString()}`);
+        const data = await res.json();
+        setProducts(data.products || []);
 
-      if (typeof data.pages === 'number') {
-        setTotalPages(Math.max(1, data.pages));
-      } else if (typeof data.total === 'number') {
-        setTotalPages(Math.max(1, Math.ceil(data.total / PAGE_SIZE)));
+        if (typeof data.pages === 'number') {
+          setTotalPages(Math.max(1, data.pages));
+        } else if (typeof data.total === 'number') {
+          setTotalPages(Math.max(1, Math.ceil(data.total / PAGE_SIZE)));
+        } else {
+          setTotalPages(1);
+        }
       } else {
+        // Has subcategories — no product list on this page.
+        setProducts([]);
         setTotalPages(1);
       }
-    } else {
-      // Has subcategories — no product list on this page.
+    } catch (err) {
+      console.error('Failed to load category', err);
       setProducts([]);
       setTotalPages(1);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }, [slug, sort, page]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // Reset to page 1 whenever the category or sort changes
-  useEffect(() => {
+  // Changing the sort always returns to page 1 (set together with sort,
+  // so React batches them into a single fetch).
+  const handleSortChange = (newSort) => {
+    setSort(newSort);
     setPage(1);
-  }, [slug, sort]);
+  };
 
   const hasSubcategories = subcategories.length > 0;
 
@@ -96,7 +113,12 @@ export default function CategoryPage() {
             >
               <div className="w-16 h-16 rounded-full bg-brand-cream overflow-hidden">
                 {sub.image && (
-                  <img src={sub.image} alt={sub.name} className="w-full h-full object-cover" />
+                  <img
+                    src={sub.image}
+                    alt={sub.name}
+                    loading="lazy"
+                    className="w-full h-full object-cover"
+                  />
                 )}
               </div>
               <p className="font-medium text-sm">{sub.name}</p>
@@ -116,7 +138,7 @@ export default function CategoryPage() {
             activeSize=""
             onSizeChange={() => {}}
             sort={sort}
-            onSortChange={setSort}
+            onSortChange={handleSortChange}
           />
 
           {loading ? (

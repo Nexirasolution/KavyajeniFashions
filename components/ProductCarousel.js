@@ -1,5 +1,7 @@
 'use client';
 
+// Location: components/ProductTabs.js
+
 import { useState } from 'react';
 import ProductCard from './ProductCard';
 import Link from 'next/link';
@@ -16,11 +18,12 @@ import Link from 'next/link';
 const TABS = [
   { key: 'best', label: '⭐ Bestsellers' },
   { key: 'top',  label: '🔥 Top Sellers' },
-  { key: 'new',  label: '✨ New Arrivals' },
+  { key: 'new',  label: '✨ New Arrivals' }, // backed by `activeSellers`
 ];
 
 export default function ProductTabs({ bestSellers, topSellers, activeSellers }) {
-  const [active, setActive] = useState('best');
+  // Default to the active sellers tab ('new')
+  const [active, setActive] = useState('new');
 
   const map = { best: bestSellers, top: topSellers, new: activeSellers };
   const products = map[active] || [];

@@ -1,15 +1,19 @@
+// Location: app/products/page.js
+
 import ProductCard from '@/components/ProductCard';
 import Pagination from '@/components/Pagination';
 import { dbConnect } from '@/lib/mongodb';
 import Product from '@/models/Product';
+import { inStockFilter } from '@/lib/stockFilter';
 import '@/models/Category'; // registers the Category schema — required for .populate('category')
 
-const LIMIT = 24;
+const LIMIT = 100;
 
 async function getAllProducts(page) {
   await dbConnect();
 
-  const query = { isActive: true };
+  // Hide products whose stock is 0 across all variants/sizes
+  const query = { isActive: true, ...inStockFilter() };
 
   const [products, total] = await Promise.all([
     Product.find(query)
@@ -33,7 +37,7 @@ export const metadata = {
 };
 
 export default async function ProductsPage({ searchParams }) {
-  const page = Math.max(1, Number(searchParams?.page || 1));
+  const page = Math.max(1, Number(searchParams?.page) || 1);
   const { products, total, pages } = await getAllProducts(page);
 
   return (

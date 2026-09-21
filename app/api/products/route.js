@@ -1,3 +1,5 @@
+// Location: app/api/products/route.js
+
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
@@ -6,12 +8,18 @@ import Product from '@/models/Product';
 import Category from '@/models/Category';
 import slugify from 'slugify';
 import { requireAdmin } from '@/lib/apiAuth';
+import { inStockFilter } from '@/lib/stockFilter';
 
-// GET /api/products?category=slug&size=M&minPrice=0&maxPrice=2000&sort=newest&page=1&limit=20&tag=bestseller
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 100; // hard cap so nobody can request ?limit=100000
+
+// GET /api/products?category=slug&size=M&minPrice=0&maxPrice=2000&sort=newest&page=1&limit=100&tag=bestseller
 export async function GET(req) {
   await dbConnect();
   const { searchParams } = new URL(req.url);
-  const query = { isActive: true };
+  // Customer-facing list: hide products whose stock is 0 across all variants/sizes.
+  // (The admin inventory page uses /api/admin/inventory, which includes them.)
+  const query = { isActive: true, ...inStockFilter() };
 
   const categorySlug = searchParams.get('category');
   if (categorySlug) {
@@ -25,7 +33,7 @@ export async function GET(req) {
         ? { $in: [cat._id, ...subcategoryIds] }
         : cat._id;
     } else {
-      return NextResponse.json({ products: [], total: 0 });
+      return NextResponse.json({ products: [], total: 0, page: 1, pages: 1 });
     }
   }
 
@@ -55,8 +63,8 @@ export async function GET(req) {
     rating: { rating: -1 }
   };
 
-  const page = Number(searchParams.get('page') || 1);
-  const limit = Number(searchParams.get('limit') || 24);
+  const page = Math.max(1, Number(searchParams.get('page')) || 1);
+  const limit = Math.min(MAX_LIMIT, Math.max(1, Number(searchParams.get('limit')) || DEFAULT_LIMIT));
 
   const [products, total] = await Promise.all([
     Product.find(query)
@@ -67,7 +75,7 @@ export async function GET(req) {
     Product.countDocuments(query)
   ]);
 
-  return NextResponse.json({ products, total, page, pages: Math.ceil(total / limit) });
+  return NextResponse.json({ products, total, page, pages: Math.max(1, Math.ceil(total / limit)) });
 }
 
 export const POST = requireAdmin(async (req) => {
