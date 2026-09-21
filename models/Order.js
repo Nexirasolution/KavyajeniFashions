@@ -46,9 +46,13 @@ const OrderSchema = new mongoose.Schema(
     discount: { type: Number, default: 0 },
     couponCode: { type: String, default: '' },
     shippingFee: { type: Number, default: 0 },
+    // Extra charge added for Cash on Delivery orders (0 for online orders).
+    codFee: { type: Number, default: 0 },
     total: Number,
-    // Razorpay is the only payment method now.
-    paymentMethod: { type: String, enum: ['razorpay'], default: 'razorpay' },
+    // 'razorpay' = paid online, 'cod' = Cash on Delivery.
+    paymentMethod: { type: String, enum: ['razorpay', 'cod'], default: 'razorpay' },
+    // For COD, paymentStatus stays 'pending' until the cash is collected;
+    // set it to 'paid' from the admin panel after delivery.
     paymentStatus: { type: String, enum: ['pending', 'paid', 'failed', 'refunded'], default: 'pending' },
     razorpayOrderId: String,
     razorpayPaymentId: String,
@@ -63,10 +67,10 @@ const OrderSchema = new mongoose.Schema(
       awbNumber: { type: String, default: '' }
     },
     notes: { type: String, default: '' },
-    // Set on creation to a short window (~15 min). The cron sweep cancels
-    // and releases stock for any order still 'pending' past this time
-    // (i.e. the customer never completed or abandoned payment cleanly).
-    // Cleared once paymentStatus leaves 'pending'.
+    // Set on creation to a short window (~15 min) for ONLINE orders only.
+    // The cron sweep cancels and releases stock for any online order still
+    // 'pending' past this time. COD orders never get an expiresAt, so the
+    // sweep can never touch them. Cleared once paymentStatus leaves 'pending'.
     expiresAt: { type: Date, default: null },
     // Exact stock deltas reserved for this order, kept separately from
     // `items` so a webhook or cron job — running long after the original
@@ -78,5 +82,11 @@ const OrderSchema = new mongoose.Schema(
 
 OrderSchema.index({ razorpayOrderId: 1 }, { unique: true, sparse: true });
 OrderSchema.index({ paymentMethod: 1, paymentStatus: 1, expiresAt: 1 });
+
+// In development, drop the cached model so schema edits (like adding 'cod')
+// take effect after a hot reload instead of needing a full server restart.
+if (process.env.NODE_ENV !== 'production' && mongoose.models.Order) {
+  delete mongoose.models.Order;
+}
 
 export default mongoose.models.Order || mongoose.model('Order', OrderSchema);

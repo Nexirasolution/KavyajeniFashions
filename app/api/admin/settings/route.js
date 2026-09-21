@@ -4,38 +4,33 @@ import { NextResponse } from 'next/server';
 import { dbConnect } from '@/lib/mongodb';
 import Settings from '@/models/Settings';
 import { requireAdmin } from '@/lib/apiAuth';
+import { getShippingSettings } from '@/lib/shipping';
+import { sanitizeRule, sanitizeStateRules } from '@/lib/shippingConfig';
 
 export async function GET() {
   await dbConnect();
-  let settings = await Settings.findOne({ key: 'global' });
-  if (!settings) settings = await Settings.create({ key: 'global' });
+  // Creates the document / upgrades an old one to state-wise rules if needed.
+  const settings = await getShippingSettings();
   return NextResponse.json({ settings });
 }
 
 export const PUT = requireAdmin(async (req) => {
   await dbConnect();
   const body = await req.json();
+
+  // Never write Mongo-managed fields back, and never let the key change.
+  delete body._id;
+  delete body.__v;
+  delete body.createdAt;
+  delete body.updatedAt;
+  delete body.key;
+
+  if (body.defaultRule) body.defaultRule = sanitizeRule(body.defaultRule);
+  if (body.shippingRules) body.shippingRules = sanitizeStateRules(body.shippingRules);
+
   const settings = await Settings.findOneAndUpdate({ key: 'global' }, body, { new: true, upsert: true });
   return NextResponse.json({ settings });
 });
 
-
-export async function POST(req) {
-  try {
-    const { subtotal } = await req.json();
- 
-    await dbConnect();
-    const settings = await Settings.findOne({ key: 'global' });
-    if (!settings) {
-      return NextResponse.json({ error: 'Settings not configured' }, { status: 500 });
-    }
- 
-    const { shippingFee, freeShippingAbove } = settings;
-    const shippingCost = subtotal >= freeShippingAbove ? 0 : shippingFee;
- 
-    return NextResponse.json({ shippingCost, freeShippingAbove, shippingFee });
-  } catch (err) {
-    console.error('Shipping calculate error:', err);
-    return NextResponse.json({ error: 'Could not calculate shipping' }, { status: 500 });
-  }
-}
+// NOTE: the old public POST (shipping calculation) was removed.
+// Checkout now uses POST /api/shipping/quote instead.

@@ -6,6 +6,7 @@ import Script from 'next/script';
 import toast from 'react-hot-toast';
 import { useCart } from '@/components/CartContext';
 import { formatINR } from '@/lib/utils';
+import { INDIAN_STATES } from '@/lib/shippingConfig';
 import { AlertTriangle } from 'lucide-react';
 
 export default function CheckoutPage() {
@@ -22,39 +23,80 @@ export default function CheckoutPage() {
   // Map of "productId-variantId-size" -> { available, reason } for unavailable items
   const [stockIssues, setStockIssues] = useState({});
 
-  // Shipping state from settings API
-  const [shipping, setShipping] = useState(null);
-  const [freeShippingAbove, setFreeShippingAbove] = useState(null);
+  // 'online' | 'cod'
+  const [paymentMethod, setPaymentMethod] = useState('online');
+
+  // Shipping + COD quote for the selected state, from /api/shipping/quote.
+  // Shape: { shippingFee, freeShippingAbove, cod: { available, fee, reason }, forState }
+  const [quote, setQuote] = useState(null);
   const [shippingLoading, setShippingLoading] = useState(false);
 
   const discountedSubtotal = subtotal - discount;
-  const total = shipping !== null ? Math.round(discountedSubtotal + shipping) : null;
 
-  const fetchShipping = useCallback(async () => {
-    setShippingLoading(true);
-    try {
-      const res = await fetch('/api/admin/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subtotal: discountedSubtotal })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setShipping(data.shippingCost);
-        setFreeShippingAbove(data.freeShippingAbove);
-      } else {
-        toast.error(data.error || 'Could not calculate shipping');
-      }
-    } catch {
-      toast.error('Could not calculate shipping');
-    } finally {
-      setShippingLoading(false);
-    }
-  }, [discountedSubtotal]);
+  // Ignore a quote that belongs to a previously selected state.
+  const activeQuote = quote && quote.forState === form.state ? quote : null;
+  const shipping = activeQuote ? activeQuote.shippingFee : null;
+  const freeShippingAbove = activeQuote ? activeQuote.freeShippingAbove : 0;
+  const cod = activeQuote ? activeQuote.cod : null;
+  const codAvailable = !!cod?.available;
+  const codFee = paymentMethod === 'cod' && codAvailable ? cod.fee : 0;
 
+  const total = shipping !== null ? Math.round(discountedSubtotal + shipping + codFee) : null;
+
+  // Stable string so the quote effect doesn't re-run on every render.
+  const itemsKey = JSON.stringify(
+    items.map((i) => ({
+      productId: i.productId, variantId: i.variantId, size: i.size, qty: i.qty,
+      isCombo: i.isCombo || false, comboId: i.comboId
+    }))
+  );
+
+  // Recalculate shipping + COD whenever state, cart, or discount changes.
   useEffect(() => {
-    fetchShipping();
-  }, [fetchShipping]);
+    if (!form.state) {
+      setQuote(null);
+      setShippingLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setShippingLoading(true);
+      try {
+        const res = await fetch('/api/shipping/quote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: JSON.parse(itemsKey),
+            state: form.state,
+            subtotal: discountedSubtotal
+          })
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (res.ok) {
+          setQuote({ ...data, forState: form.state });
+        } else {
+          setQuote(null);
+          toast.error(data.error || 'Could not calculate shipping');
+        }
+      } catch {
+        if (!cancelled) {
+          setQuote(null);
+          toast.error('Could not calculate shipping');
+        }
+      } finally {
+        if (!cancelled) setShippingLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [form.state, itemsKey, discountedSubtotal]);
+
+  // If COD stops being available (state or cart changed), fall back to online.
+  useEffect(() => {
+    if (paymentMethod === 'cod' && activeQuote && !activeQuote.cod?.available) {
+      setPaymentMethod('online');
+    }
+  }, [activeQuote, paymentMethod]);
 
   function issueKey(i) {
     return [i.productId, i.variantId, i.size].filter(Boolean).join('-');
@@ -109,7 +151,7 @@ export default function CheckoutPage() {
   }
 
   async function placeOrder() {
-    if (!form.name || !form.phone || !form.line1 || !form.city || !form.pincode) {
+    if (!form.name || !form.phone || !form.line1 || !form.city || !form.state || !form.pincode) {
       toast.error('Please fill all required fields');
       return;
     }
@@ -148,7 +190,8 @@ export default function CheckoutPage() {
           items: orderItems,
           customer: { name: form.name, phone: form.phone, email: form.email },
           shippingAddress: form,
-          couponCode: coupon
+          couponCode: coupon,
+          paymentMethod
         })
       });
       const orderData = await orderRes.json();
@@ -159,6 +202,14 @@ export default function CheckoutPage() {
           await runStockCheck();
         }
         toast.error(orderData.error || 'Payment gateway error');
+        setSubmitting(false);
+        return;
+      }
+
+      // Cash on Delivery: the order is already placed, no payment modal.
+      if (orderData.cod) {
+        clearCart();
+        router.push(`/order-success/${orderData.dbOrderId}`);
         setSubmitting(false);
         return;
       }
@@ -217,6 +268,22 @@ export default function CheckoutPage() {
   const placeOrderDisabled =
     submitting || shippingLoading || checkingStock || shipping === null || items.length === 0 || hasStockIssues;
 
+  const ctaLabel = submitting
+    ? 'Placing Order…'
+    : checkingStock
+      ? 'Checking stock…'
+      : hasStockIssues
+        ? 'Fix unavailable items to continue'
+        : !form.state
+          ? 'Select your state to continue'
+          : shippingLoading
+            ? 'Calculating shipping…'
+            : total !== null
+              ? paymentMethod === 'cod'
+                ? `Place COD Order · ${formatINR(total)}`
+                : `Pay ${formatINR(total)}`
+              : 'Proceed to Pay';
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 sm:py-8">
       <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
@@ -234,8 +301,8 @@ export default function CheckoutPage() {
         </div>
       )}
 
-      {/* Free shipping nudge */}
-      {freeShippingAbove !== null && shipping !== null && shipping > 0 && !hasStockIssues && (
+      {/* Free shipping nudge (only for states that have a free-shipping threshold) */}
+      {freeShippingAbove > 0 && shipping !== null && shipping > 0 && !hasStockIssues && (
         <p className="text-xs text-brand-ink/60 bg-brand-magenta/5 border border-brand-magenta/15 rounded-lg px-3 py-2 mb-4">
           Add {formatINR(freeShippingAbove - discountedSubtotal)} more to get <span className="font-semibold text-brand-green">free shipping</span>!
         </p>
@@ -293,13 +360,18 @@ export default function CheckoutPage() {
               value={form.city}
               onChange={(e) => update('city', e.target.value)}
             />
-            <input
-              className="border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-              placeholder="State"
+            {/* Dropdown (not free text) so the state always matches an admin rule exactly */}
+            <select
+              className="border rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
               autoComplete="address-level1"
               value={form.state}
               onChange={(e) => update('state', e.target.value)}
-            />
+            >
+              <option value="">State *</option>
+              {INDIAN_STATES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <input
@@ -405,14 +477,22 @@ export default function CheckoutPage() {
                 <span>
                   {shippingLoading
                     ? <span className="text-brand-ink/40">Calculating…</span>
-                    : shipping === 0
-                      ? <span className="text-brand-green font-medium">Free</span>
-                      : shipping !== null
-                        ? formatINR(shipping)
-                        : <span className="text-brand-ink/40">—</span>
+                    : !form.state
+                      ? <span className="text-brand-ink/40">Select state</span>
+                      : shipping === 0
+                        ? <span className="text-brand-green font-medium">Free</span>
+                        : shipping !== null
+                          ? formatINR(shipping)
+                          : <span className="text-brand-ink/40">—</span>
                   }
                 </span>
               </div>
+              {codFee > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-brand-ink/70">COD charge</span>
+                  <span>{formatINR(codFee)}</span>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-between font-bold text-base sm:text-lg mt-3 pt-3 border-t">
@@ -426,7 +506,44 @@ export default function CheckoutPage() {
           {/* Payment Method */}
           <div className="card-soft p-4 sm:p-5">
             <h2 className="font-semibold text-brand-ink mb-2 text-sm sm:text-base">Payment Method</h2>
-            <p className="text-sm text-brand-ink/70">Pay Online (Cards / UPI / Netbanking)</p>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm text-brand-ink/80 cursor-pointer">
+                <input
+                  type="radio"
+                  name="paymentMethod"
+                  checked={paymentMethod === 'online'}
+                  onChange={() => setPaymentMethod('online')}
+                />
+                <span>Pay Online (Cards / UPI / Netbanking)</span>
+              </label>
+
+              <label
+                className={`flex items-center gap-2 text-sm ${
+                  codAvailable ? 'text-brand-ink/80 cursor-pointer' : 'text-brand-ink/40 cursor-not-allowed'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="paymentMethod"
+                  disabled={!codAvailable}
+                  checked={paymentMethod === 'cod'}
+                  onChange={() => setPaymentMethod('cod')}
+                />
+                <span>
+                  Cash on Delivery
+                  {codAvailable && cod.fee > 0 ? ` (+${formatINR(cod.fee)} COD charge)` : ''}
+                </span>
+              </label>
+
+              {!form.state && (
+                <p className="text-xs text-brand-ink/60">
+                  Select your state to see whether Cash on Delivery is available.
+                </p>
+              )}
+              {activeQuote && !codAvailable && cod?.reason && (
+                <p className="text-xs text-brand-ink/60">{cod.reason}</p>
+              )}
+            </div>
           </div>
 
           {/* Place Order CTA */}
@@ -435,18 +552,7 @@ export default function CheckoutPage() {
             disabled={placeOrderDisabled}
             className="btn-primary w-full py-3 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {submitting
-              ? 'Placing Order…'
-              : checkingStock
-                ? 'Checking stock…'
-                : hasStockIssues
-                  ? 'Fix unavailable items to continue'
-                  : shippingLoading
-                    ? 'Calculating shipping…'
-                    : total !== null
-                      ? `Pay ${formatINR(total)}`
-                      : 'Proceed to Pay'
-            }
+            {ctaLabel}
           </button>
         </div>
       </div>
