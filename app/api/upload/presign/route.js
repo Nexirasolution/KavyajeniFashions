@@ -1,19 +1,99 @@
 import { NextResponse } from 'next/server';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'crypto';
 import { requireAdmin } from '@/lib/apiAuth';
-import { cloudinary } from '@/lib/cloudinary';
+import { r2 } from '@/lib/r2Client';
 
 // POST /api/upload/presign
 // body: { filename, contentType, contentLength, folder }
 //
-// Returns a signed payload so the browser can upload large files
-// (e.g. reel videos) straight to Cloudinary, without the file passing
+// Returns a signed PUT URL so the browser can upload large files
+// (e.g. reel videos) straight to R2, without the file passing
 // through your Next.js server.
 //
 // Client flow:
-//   1. POST here -> { uploadUrl, fields, ... }
-//   2. Build a FormData with every entry in `fields`, then append `file`
-//      LAST, and POST it to `uploadUrl`.
-//   3. Cloudinary responds with { secure_url, public_id, ... }.
+//   1. POST here -> { uploadUrl, publicUrl, key, expiresIn }
+//   2. PUT the raw file body to `uploadUrl` with header
+//      'Content-Type': contentType (must match exactly what was signed).
+//   3. The file is now live at `publicUrl`.
+
+const ALLOWED_TYPES = new Set([
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
+
+const MAX_BYTES = 200 * 1024 * 1024;
+
+const ALLOWED_FOLDER_PREFIXES = ['uploads', 'reels', 'avatars', 'banners', 'combos'];
+
+function isAllowedFolder(folder) {
+  if (typeof folder !== 'string' || !folder || folder.includes('..')) return false;
+  return ALLOWED_FOLDER_PREFIXES.some((prefix) => folder === prefix || folder.startsWith(`${prefix}/`));
+}
+
+const ONE_YEAR = 60 * 60 * 24 * 365;
+
+export const POST = requireAdmin(async (req) => {
+  try {
+    const { filename, contentType, contentLength, folder = 'uploads' } = await req.json();
+
+    if (!filename) {
+      return NextResponse.json({ error: 'filename is required' }, { status: 400 });
+    }
+    if (!contentType || !ALLOWED_TYPES.has(contentType)) {
+      return NextResponse.json({ error: `Unsupported contentType: ${contentType}` }, { status: 400 });
+    }
+    if (!isAllowedFolder(folder)) {
+      return NextResponse.json({ error: `Unsupported folder: ${folder}` }, { status: 400 });
+    }
+    if (!contentLength || typeof contentLength !== 'number' || contentLength <= 0) {
+      return NextResponse.json({ error: 'contentLength (bytes) is required' }, { status: 400 });
+    }
+    if (contentLength > MAX_BYTES) {
+      return NextResponse.json(
+        { error: `File too large. Max ${MAX_BYTES / (1024 * 1024)}MB` },
+        { status: 400 }
+      );
+    }
+
+    // Strip anything that isn't a safe filename character, and cap
+    // length so absurdly long names can't blow up the object key.
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-100);
+    const key = `${folder}/${randomUUID()}-${safeName}`;
+
+    const command = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: key,
+      ContentType: contentType,
+      ContentLength: contentLength,
+      CacheControl: `public, max-age=${ONE_YEAR}, immutable`,
+    });
+
+    // Short expiry since this is a one-shot PUT the client should use
+    // immediately, unlike the 1hr Cloudinary POST-policy window.
+    const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 300 });
+    const publicUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
+
+    return NextResponse.json({ uploadUrl, publicUrl, key, expiresIn: 300 });
+  } catch (err) {
+    console.error('Presign failed:', err);
+    return NextResponse.json({ error: 'Could not create upload URL' }, { status: 500 });
+  }
+});
+
+/* ---------------------------------------------------------------
+   Cloudinary signed-upload version (disabled).
+   To switch back: delete the R2 code above, uncomment this,
+   and restore the imports below.
+   ---------------------------------------------------------------
+import { NextResponse } from 'next/server';
+import { requireAdmin } from '@/lib/apiAuth';
+import { cloudinary } from '@/lib/cloudinary';
 
 const ALLOWED_TYPES = new Set([
   'video/mp4',
@@ -97,71 +177,6 @@ export const POST = requireAdmin(async (req) => {
   } catch (err) {
     console.error('Presign failed:', err);
     return NextResponse.json({ error: 'Could not create upload signature' }, { status: 500 });
-  }
-});
-
-/* ---------------------------------------------------------------
-   Cloudflare R2 presigned PUT version (disabled).
-   To switch back: delete the Cloudinary code above, uncomment this,
-   and restore the imports below.
-   ---------------------------------------------------------------
-import { NextResponse } from 'next/server';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { randomUUID } from 'crypto';
-import { requireAdmin } from '@/lib/apiAuth';
-import { r2 } from '@/lib/r2Client';
-
-const ALLOWED_TYPES = new Set([
-  'video/mp4', 'video/webm', 'video/quicktime',
-  'image/jpeg', 'image/png', 'image/webp',
-]);
-const MAX_BYTES = 200 * 1024 * 1024;
-const ALLOWED_FOLDER_PREFIXES = ['uploads', 'reels', 'avatars', 'banners', 'combos'];
-
-function isAllowedFolder(folder) {
-  if (typeof folder !== 'string' || !folder || folder.includes('..')) return false;
-  return ALLOWED_FOLDER_PREFIXES.some((prefix) => folder === prefix || folder.startsWith(`${prefix}/`));
-}
-
-const ONE_YEAR = 60 * 60 * 24 * 365;
-
-export const POST = requireAdmin(async (req) => {
-  try {
-    const { filename, contentType, contentLength, folder = 'uploads' } = await req.json();
-
-    if (!filename) return NextResponse.json({ error: 'filename is required' }, { status: 400 });
-    if (!contentType || !ALLOWED_TYPES.has(contentType)) {
-      return NextResponse.json({ error: `Unsupported contentType: ${contentType}` }, { status: 400 });
-    }
-    if (!isAllowedFolder(folder)) {
-      return NextResponse.json({ error: `Unsupported folder: ${folder}` }, { status: 400 });
-    }
-    if (!contentLength || typeof contentLength !== 'number' || contentLength <= 0) {
-      return NextResponse.json({ error: 'contentLength (bytes) is required' }, { status: 400 });
-    }
-    if (contentLength > MAX_BYTES) {
-      return NextResponse.json({ error: `File too large. Max ${MAX_BYTES / (1024 * 1024)}MB` }, { status: 400 });
-    }
-
-    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-100);
-    const key = `${folder}/${randomUUID()}-${safeName}`;
-
-    const command = new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: key,
-      ContentType: contentType,
-      ContentLength: contentLength,
-      CacheControl: `public, max-age=${ONE_YEAR}, immutable`,
-    });
-
-    const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 300 });
-    const publicUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
-
-    return NextResponse.json({ uploadUrl, publicUrl, key, expiresIn: 300 });
-  } catch (err) {
-    console.error('Presign failed:', err);
-    return NextResponse.json({ error: 'Could not create upload URL' }, { status: 500 });
   }
 });
 */
