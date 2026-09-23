@@ -18,7 +18,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB per image
 const UPLOAD_CONCURRENCY = 3;
 
 // One entry per selected file: tracks local preview, upload state, and the
-// final Cloudinary url once uploaded.
+// final R2 public url once uploaded.
 function useImageQueue() {
   const [items, setItems] = useState([]); // { id, file, previewUrl, url, uploading, error }
   const itemsRef = useRef(items);
@@ -135,9 +135,9 @@ export default function BulkUploadPage() {
 
   const hasIncompleteGroup = items.length > 0 && items.length % groupSize !== 0;
 
-  // Uploads straight from the browser to Cloudinary using a signed payload from
+  // Uploads straight from the browser to R2 using a presigned PUT url from
   // /api/upload/presign. This avoids the ~4.5MB serverless body limit.
-  // Returns the final secure_url so callers never depend on React state.
+  // Returns the final public url so callers never depend on React state.
   async function uploadOne(item) {
     updateItem(item.id, { uploading: true, error: '' });
     try {
@@ -154,18 +154,19 @@ export default function BulkUploadPage() {
       const presign = await presignRes.json();
       if (!presignRes.ok) throw new Error(presign.error || 'Could not start upload');
 
-      const fd = new FormData();
-      Object.entries(presign.fields).forEach(([k, v]) => fd.append(k, v));
-      fd.append('file', item.file); // file must be appended last
-
-      const res = await fetch(presign.uploadUrl, { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok || !data.secure_url) {
-        throw new Error(data?.error?.message || 'Upload failed');
+      // R2 presign returns a single PUT url — send the raw file body with
+      // the same Content-Type that was signed, no FormData involved.
+      const res = await fetch(presign.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': item.file.type },
+        body: item.file,
+      });
+      if (!res.ok) {
+        throw new Error(`Upload failed (${res.status})`);
       }
 
-      updateItem(item.id, { uploading: false, url: data.secure_url });
-      return data.secure_url;
+      updateItem(item.id, { uploading: false, url: presign.publicUrl });
+      return presign.publicUrl;
     } catch (err) {
       updateItem(item.id, { uploading: false, error: err.message });
       throw err;
