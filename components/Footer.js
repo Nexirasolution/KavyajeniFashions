@@ -28,7 +28,7 @@ export default function Footer() {
           <h4 className="font-semibold mb-3">Get in touch</h4>
           <div className="flex gap-3 mb-3">
             
-             <a href="https://instagram.com/xx "
+             <a href="https://www.instagram.com/kavyajeni__nighty_?stkn=MWl5eXpvNXkybTR4"
               target="_blank"
               rel="noreferrer"
               className="bg-white/15 p-2.5 rounded-full hover:bg-white/25"
