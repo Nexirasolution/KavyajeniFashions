@@ -6,6 +6,7 @@ import Settings from '@/models/Settings';
 import { requireAdmin } from '@/lib/apiAuth';
 import { getShippingSettings } from '@/lib/shipping';
 import { sanitizeRule, sanitizeStateRules } from '@/lib/shippingConfig';
+import { sanitizeDiscountRules } from '@/lib/discountConfig';
 
 export async function GET() {
   await dbConnect();
@@ -27,6 +28,7 @@ export const PUT = requireAdmin(async (req) => {
 
   if (body.defaultRule) body.defaultRule = sanitizeRule(body.defaultRule);
   if (body.shippingRules) body.shippingRules = sanitizeStateRules(body.shippingRules);
+  if (body.discountRules) body.discountRules = sanitizeDiscountRules(body.discountRules);
 
   const settings = await Settings.findOneAndUpdate({ key: 'global' }, body, { new: true, upsert: true });
   return NextResponse.json({ settings });

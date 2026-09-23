@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { INDIAN_STATES, DEFAULT_RULE, normalizeState } from '@/lib/shippingConfig';
+import { DEFAULT_DISCOUNT_RULE } from '@/lib/discountConfig';
 
 const COD_MODES = [
   { value: 'disabled', label: 'COD not available' },
@@ -110,6 +111,73 @@ function RuleFields({ rule, onChange }) {
   );
 }
 
+// Fields for one automatic discount tier.
+function DiscountRuleFields({ rule, onChange }) {
+  const set = (patch) => onChange({ ...rule, ...patch });
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="text-sm font-medium">Label (shown to customer)</label>
+        <input
+          className={inputCls}
+          placeholder="Buy 3 or more and get 10% off"
+          value={rule.label}
+          onChange={(e) => set({ label: e.target.value })}
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className="text-sm font-medium">Min Amount (₹)</label>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={rule.minAmount}
+            onChange={(e) => set({ minAmount: Number(e.target.value) })}
+          />
+          <p className="text-xs text-brand-ink/50 mt-1">0 = no minimum</p>
+        </div>
+        <div>
+          <label className="text-sm font-medium">Min Quantity</label>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={rule.minQty}
+            onChange={(e) => set({ minQty: Number(e.target.value) })}
+          />
+          <p className="text-xs text-brand-ink/50 mt-1">0 = no minimum</p>
+        </div>
+        <div>
+          <label className="text-sm font-medium">Exact Quantity</label>
+          <input
+            type="number"
+            min="0"
+            className={inputCls}
+            value={rule.exactQty}
+            onChange={(e) => set({ exactQty: Number(e.target.value) })}
+          />
+          <p className="text-xs text-brand-ink/50 mt-1">0 = not required</p>
+        </div>
+      </div>
+
+      <div>
+        <label className="text-sm font-medium">Discount Percent (%)</label>
+        <input
+          type="number"
+          min="0"
+          max="100"
+          className={inputCls}
+          value={rule.discountPercent}
+          onChange={(e) => set({ discountPercent: Number(e.target.value) })}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function AdminSettingsPage() {
   const [form, setForm] = useState(null);
 
@@ -155,12 +223,42 @@ export default function AdminSettingsPage() {
     return true;
   }
 
+  function updateDiscountRule(idx, next) {
+    setForm((f) => ({
+      ...f,
+      discountRules: (f.discountRules || []).map((r, i) => (i === idx ? next : r))
+    }));
+  }
+
+  function removeDiscountRule(idx) {
+    setForm((f) => ({ ...f, discountRules: (f.discountRules || []).filter((_, i) => i !== idx) }));
+  }
+
+  function addDiscountRule() {
+    setForm((f) => ({ ...f, discountRules: [...(f.discountRules || []), { ...DEFAULT_DISCOUNT_RULE }] }));
+  }
+
+  function validateDiscountRule(rule, label) {
+    if (!(Number(rule.discountPercent) > 0)) {
+      toast.error(`${label}: set a discount percent greater than 0`);
+      return false;
+    }
+    if (!(rule.minAmount > 0) && !(rule.minQty > 0) && !(rule.exactQty > 0)) {
+      toast.error(`${label}: set at least a min amount, min quantity, or exact quantity`);
+      return false;
+    }
+    return true;
+  }
+
   async function submit(e) {
     e.preventDefault();
 
     if (!validateRule(form.defaultRule, 'Other states')) return;
     for (const r of form.shippingRules) {
       if (!validateRule(r, r.state)) return;
+    }
+    for (const [i, r] of (form.discountRules || []).entries()) {
+      if (!validateDiscountRule(r, r.label || `Discount rule ${i + 1}`)) return;
     }
 
     const res = await fetch('/api/admin/settings', {
@@ -181,6 +279,7 @@ export default function AdminSettingsPage() {
 
   const defaultRule = form.defaultRule || DEFAULT_RULE;
   const shippingRules = form.shippingRules || [];
+  const discountRules = form.discountRules || [];
   const usedStates = new Set(shippingRules.map((r) => normalizeState(r.state)));
 
   return (
@@ -258,6 +357,36 @@ export default function AdminSettingsPage() {
               onChange={(next) => setForm({ ...form, defaultRule: next })}
             />
           </div>
+        </div>
+
+        <div className="card-soft p-5 space-y-4">
+          <div>
+            <h2 className="font-semibold text-brand-ink">Automatic Discounts</h2>
+            <p className="text-xs text-brand-ink/60 mt-1">
+              Applies automatically at checkout — no coupon needed. Set a minimum amount, a
+              minimum quantity, an exact quantity, or any mix of the three. If a cart matches
+              more than one rule, the highest discount wins.
+            </p>
+          </div>
+
+          {discountRules.map((rule, idx) => (
+            <div key={idx} className="border rounded-lg p-4 space-y-3">
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => removeDiscountRule(idx)}
+                  className="text-sm text-red-600 underline"
+                >
+                  Remove
+                </button>
+              </div>
+              <DiscountRuleFields rule={rule} onChange={(next) => updateDiscountRule(idx, next)} />
+            </div>
+          ))}
+
+          <button type="button" onClick={addDiscountRule} className="btn-outline text-sm">
+            Add discount rule
+          </button>
         </div>
 
         <div className="card-soft p-5 space-y-3">

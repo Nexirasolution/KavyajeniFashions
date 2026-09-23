@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Script from 'next/script';
 import toast from 'react-hot-toast';
@@ -31,7 +31,17 @@ export default function CheckoutPage() {
   const [quote, setQuote] = useState(null);
   const [shippingLoading, setShippingLoading] = useState(false);
 
-  const discountedSubtotal = subtotal - discount;
+  // Automatic, tiered discount from /api/discounts/quote (no coupon needed).
+  // Shape: { label, discountPercent, discountAmount, minAmount, minQty, exactQty } | null
+  const [autoDiscount, setAutoDiscount] = useState(null);
+  const [showDiscountPopup, setShowDiscountPopup] = useState(false);
+  const lastPoppedDiscountKey = useRef(null);
+
+  // Whichever discount is bigger wins — a manually applied coupon or the
+  // automatic tiered discount. They don't stack.
+  const bestDiscountAmount = Math.max(discount, autoDiscount?.discountAmount || 0);
+  const usingAutoDiscount = (autoDiscount?.discountAmount || 0) > discount;
+  const discountedSubtotal = subtotal - bestDiscountAmount;
 
   // Ignore a quote that belongs to a previously selected state.
   const activeQuote = quote && quote.forState === form.state ? quote : null;
@@ -90,6 +100,36 @@ export default function CheckoutPage() {
     })();
     return () => { cancelled = true; };
   }, [form.state, itemsKey, discountedSubtotal]);
+
+  // Recalculate the automatic discount whenever the cart changes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/discounts/quote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: JSON.parse(itemsKey), subtotal })
+        });
+        const data = await res.json();
+        if (!cancelled) setAutoDiscount(res.ok ? data.discount : null);
+      } catch {
+        if (!cancelled) setAutoDiscount(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [itemsKey, subtotal]);
+
+  // Pop the "you got a discount" modal once per distinct discount — not on
+  // every re-render, and not again if the same tier still applies.
+  useEffect(() => {
+    if (!autoDiscount) return;
+    const key = `${autoDiscount.label}-${autoDiscount.discountPercent}-${autoDiscount.discountAmount}`;
+    if (lastPoppedDiscountKey.current !== key) {
+      lastPoppedDiscountKey.current = key;
+      setShowDiscountPopup(true);
+    }
+  }, [autoDiscount]);
 
   // If COD stops being available (state or cart changed), fall back to online.
   useEffect(() => {
@@ -287,6 +327,28 @@ export default function CheckoutPage() {
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 sm:py-8">
       <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
+
+      {/* Automatic discount popup */}
+      {showDiscountPopup && autoDiscount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-5 text-center">
+            <p className="text-3xl mb-2">🎉</p>
+            <h3 className="font-display text-lg font-bold text-brand-magenta mb-1">
+              You&apos;ve unlocked {autoDiscount.discountPercent}% off!
+            </h3>
+            <p className="text-sm text-brand-ink/70 mb-4">
+              {autoDiscount.label || `You get ${formatINR(autoDiscount.discountAmount)} off this order.`}
+            </p>
+            <button
+              onClick={() => setShowDiscountPopup(false)}
+              className="btn-primary w-full py-2.5 text-sm"
+            >
+              Awesome, continue
+            </button>
+          </div>
+        </div>
+      )}
+
       <h1 className="font-display text-xl sm:text-2xl font-bold text-brand-magenta mb-5 sm:mb-6">
         Checkout
       </h1>
@@ -446,6 +508,13 @@ export default function CheckoutPage() {
               })}
             </div>
 
+            {/* Auto-discount banner */}
+            {autoDiscount && (
+              <p className="text-xs text-brand-green bg-brand-green/5 border border-brand-green/20 rounded-lg px-3 py-2 mt-3">
+                🎉 {autoDiscount.label || `${autoDiscount.discountPercent}% off applied automatically`}
+              </p>
+            )}
+
             {/* Coupon */}
             <div className="flex gap-2 mt-3">
               <input
@@ -457,6 +526,11 @@ export default function CheckoutPage() {
               />
               <button onClick={applyCoupon} className="btn-outline px-4 text-sm shrink-0">Apply</button>
             </div>
+            {discount > 0 && usingAutoDiscount && (
+              <p className="text-xs text-brand-ink/50 mt-1">
+                Your automatic discount is bigger, so it&apos;s the one applied instead of this coupon.
+              </p>
+            )}
 
             <hr className="my-3" />
 
@@ -466,10 +540,10 @@ export default function CheckoutPage() {
                 <span className="text-brand-ink/70">Subtotal</span>
                 <span>{formatINR(subtotal)}</span>
               </div>
-              {discount > 0 && (
+              {bestDiscountAmount > 0 && (
                 <div className="flex justify-between text-brand-green">
-                  <span>Discount</span>
-                  <span>−{formatINR(discount)}</span>
+                  <span>{usingAutoDiscount ? (autoDiscount.label || 'Discount') : 'Coupon Discount'}</span>
+                  <span>−{formatINR(bestDiscountAmount)}</span>
                 </div>
               )}
               <div className="flex justify-between">

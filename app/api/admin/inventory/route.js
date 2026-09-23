@@ -11,11 +11,14 @@ import { requireAdmin } from '@/lib/apiAuth';
 // GET /api/admin/inventory
 // Returns EVERY active product (including ones with 0 stock) with its category and parent
 // category. Pagination and category grouping happen on the client.
+//
+// `description` is included (but never `price`) so the bulk Share action can build a
+// message from name + description without ever exposing price.
 export const GET = requireAdmin(async () => {
   await dbConnect();
 
   const products = await Product.find({ isActive: true })
-    .select('name slug variants category images image thumbnail')
+    .select('name slug description variants category images image thumbnail')
     .populate({
       path: 'category',
       select: 'name slug parent',

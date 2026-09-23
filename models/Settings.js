@@ -21,6 +21,20 @@ const StateRuleSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Automatic, tiered cart discounts (e.g. "spend ₹2000+, get 10% off" or
+// "buy exactly 3, get 15% off"). Evaluated against the whole cart at
+// checkout — no coupon code needed. See lib/discountConfig.js.
+const DiscountRuleSchema = new mongoose.Schema(
+  {
+    label: { type: String, default: '' },
+    minAmount: { type: Number, default: 0, min: 0 },   // 0 = no requirement
+    minQty: { type: Number, default: 0, min: 0 },       // 0 = no requirement
+    exactQty: { type: Number, default: 0, min: 0 },     // 0 = no requirement
+    discountPercent: { type: Number, default: 0, min: 0, max: 100 }
+  },
+  { _id: false }
+);
+
 const SettingsSchema = new mongoose.Schema(
   {
     key: { type: String, required: true, unique: true, default: 'global' },
@@ -41,6 +55,9 @@ const SettingsSchema = new mongoose.Schema(
     // State-specific overrides, e.g. Tamil Nadu.
     shippingRules: { type: [StateRuleSchema], default: [] },
 
+    // Automatic cart-wide discount tiers. See lib/discountConfig.js.
+    discountRules: { type: [DiscountRuleSchema], default: [] },
+
     seoTitle: { type: String, default: 'Lakshmibala Clothing Store - Women Kurtis, Innerwear & More' },
     seoDescription: { type: String, default: 'Shop trendy women kurtis, nighties, 2 piece sets and innerwear online from Lakshmibala Clothing Store, Sivakasi.' }
   },
@@ -48,9 +65,9 @@ const SettingsSchema = new mongoose.Schema(
 );
 
 // In development, drop the cached model so schema edits (like the new
-// defaultRule / shippingRules fields) take effect after a hot reload.
-// Without this, Mongoose keeps serving the OLD schema and silently drops
-// the new fields.
+// defaultRule / shippingRules / discountRules fields) take effect after a
+// hot reload. Without this, Mongoose keeps serving the OLD schema and
+// silently drops the new fields.
 if (process.env.NODE_ENV !== 'production' && mongoose.models.Settings) {
   delete mongoose.models.Settings;
 }

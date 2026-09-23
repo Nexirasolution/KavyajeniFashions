@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Download,
   EyeOff,
   Loader2,
   Minus,
@@ -18,6 +19,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Share2,
   Trash2,
   X,
 } from 'lucide-react';
@@ -147,6 +149,76 @@ async function callBulk(payload) {
   return data;
 }
 
+/* ------------------------------ share helpers ------------------------------ */
+// Builds a name+description message and, where the browser supports it, gathers
+// the products' images so they can be handed to the native share sheet alongside
+// the text. Price is never referenced anywhere here.
+
+function slugify(name, i) {
+  const base = (name || 'product').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  return `${base || 'product'}-${i + 1}`;
+}
+
+function buildDefaultShareMessage(products) {
+  const lines = ['✨ Check these out! ✨', ''];
+  products.forEach((p, i) => {
+    lines.push(`${i + 1}. ${p.name}`);
+    if (p.description && String(p.description).trim()) lines.push(String(p.description).trim());
+    lines.push('');
+  });
+  return lines.join('\n').trim();
+}
+
+// Fetches each product's thumbnail as a File, for navigator.share({ files }).
+// Images that fail (e.g. a host without permissive CORS headers) are silently
+// skipped rather than blocking the whole share.
+async function collectShareImageFiles(products) {
+  const files = [];
+  for (const [i, p] of products.entries()) {
+    const src = getThumb(p);
+    if (!src) continue;
+    try {
+      const res = await fetch(src, { mode: 'cors' });
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      const ext = (blob.type && blob.type.split('/')[1]) || 'jpg';
+      files.push(new File([blob], `${slugify(p.name, i)}.${ext}`, { type: blob.type || 'image/jpeg' }));
+    } catch {
+      // CORS or network failure — this one image just won't be attachable automatically
+    }
+  }
+  return files;
+}
+
+// Downloads each product's thumbnail to the admin's device, for manual attaching
+// when automatic image sharing isn't available. Falls back to opening the image
+// in a new tab if the fetch itself is blocked (e.g. by CORS).
+async function downloadProductImages(products) {
+  for (const [i, p] of products.entries()) {
+    const src = getThumb(p);
+    if (!src) continue;
+    try {
+      const res = await fetch(src, { mode: 'cors' });
+      if (!res.ok) throw new Error('fetch failed');
+      const blob = await res.blob();
+      const ext = (blob.type && blob.type.split('/')[1]) || 'jpg';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${slugify(p.name, i)}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      window.open(src, '_blank'); // let the admin save it manually from the image tab
+    }
+    // Stagger slightly — back-to-back downloads get silently blocked by some browsers.
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
 /* -------------------------------- page -------------------------------- */
 
 export default function AdminInventoryPage() {
@@ -166,7 +238,7 @@ export default function AdminInventoryPage() {
   const [expanded, setExpanded] = useState({}); // { productId: true }
 
   const [selected, setSelected] = useState(() => new Set());
-  const [modal, setModal] = useState(null); // 'stock' | 'delete' | null
+  const [modal, setModal] = useState(null); // 'stock' | 'delete' | 'share' | null
   const [bulkBusy, setBulkBusy] = useState(false);
 
   const listRef = useRef(null);
@@ -824,6 +896,14 @@ export default function AdminInventoryPage() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setModal('share')}
+                  className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  <Share2 size={14} />
+                  Share
+                </button>
+                <button
+                  type="button"
                   onClick={() => setModal('stock')}
                   className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
                 >
@@ -899,6 +979,9 @@ export default function AdminInventoryPage() {
           onClose={() => setModal(null)}
           onConfirm={deleteSelected}
         />
+      )}
+      {modal === 'share' && (
+        <ShareModal products={selectedProducts} onClose={() => setModal(null)} />
       )}
     </div>
   );
@@ -1264,7 +1347,7 @@ function Modal({ title, onClose, busy, children, footer }) {
           </button>
         </div>
         {children}
-        <div className="mt-5 flex items-center justify-end gap-2">{footer}</div>
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">{footer}</div>
       </div>
     </div>
   );
@@ -1462,6 +1545,127 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
           />
         </div>
       )}
+    </Modal>
+  );
+}
+
+// Shares the selected products (image + name + description, NEVER price) as one
+// combined message. Prefers the native share sheet (images + text together, with
+// WhatsApp selectable as the target); falls back to a text-only WhatsApp link plus
+// a manual "Download images" option when the share sheet or image fetch isn't
+// available.
+function ShareModal({ products, onClose }) {
+  const [message, setMessage] = useState(() => buildDefaultShareMessage(products));
+  const [sharing, setSharing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const nativeShareSupported = typeof navigator !== 'undefined' && !!navigator.share;
+  const hasImages = products.some((p) => getThumb(p));
+
+  async function handleShareClick() {
+    setSharing(true);
+    try {
+      if (nativeShareSupported) {
+        const files = hasImages ? await collectShareImageFiles(products) : [];
+        const canShareFiles = files.length > 0 && navigator.canShare && navigator.canShare({ files });
+        try {
+          await navigator.share(canShareFiles ? { text: message, files } : { text: message });
+          onClose();
+          return;
+        } catch (err) {
+          if (err?.name === 'AbortError') return; // admin cancelled the share sheet — not an error
+          // otherwise fall through to the WhatsApp link fallback below
+        }
+      }
+
+      // Fallback: WhatsApp's click-to-chat link only carries text, never images.
+      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+      if (hasImages) {
+        toast('WhatsApp links can\'t carry images — use "Download images" below and attach them manually.', {
+          duration: 6000,
+        });
+      }
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  async function handleDownloadClick() {
+    setDownloading(true);
+    try {
+      await downloadProductImages(products);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Share ${products.length} ${plural(products.length, 'product')}`}
+      onClose={onClose}
+      busy={sharing || downloading}
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={sharing || downloading}
+            className="rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50"
+          >
+            Close
+          </button>
+          {hasImages && (
+            <button
+              type="button"
+              onClick={handleDownloadClick}
+              disabled={sharing || downloading}
+              className="inline-flex items-center gap-2 rounded-lg border border-brand-ink/10 px-3 py-2 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-50"
+            >
+              {downloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+              Download images
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleShareClick}
+            disabled={sharing || downloading}
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {sharing ? <Loader2 size={15} className="animate-spin" /> : <Share2 size={15} />}
+            Share via WhatsApp
+          </button>
+        </>
+      }
+    >
+      <p className="mb-3 text-sm text-brand-ink/60">
+        {nativeShareSupported
+          ? 'Opens your share sheet with the images and message below — pick WhatsApp there. Price is never included.'
+          : "This browser can't attach images to WhatsApp automatically. WhatsApp opens with the message below — download the images and attach them yourself."}
+      </p>
+
+      {hasImages && (
+        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+          {products.map((p) => (
+            <div key={p._id} className="flex w-20 shrink-0 flex-col items-center gap-1">
+              <Thumb product={p} />
+              <p className="w-full truncate text-center text-[11px] text-brand-ink/60">{p.name}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <label htmlFor="share-message" className="mb-1 block text-sm font-medium">
+        Message
+      </label>
+      <textarea
+        id="share-message"
+        rows={8}
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+        className="w-full rounded-lg border border-brand-ink/10 px-3 py-2 text-sm focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
+      />
+      <p className="mt-1 text-xs text-brand-ink/50">
+        Edit freely — this is exactly what gets shared. Price is never included.
+      </p>
     </Modal>
   );
 }
