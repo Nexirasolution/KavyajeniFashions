@@ -6,6 +6,51 @@ import { formatINR } from '@/lib/utils';
 
 const STATUSES = ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled', 'returned'];
 
+// Turns (paymentMethod, paymentStatus) into a short, readable label + color.
+// A COD order's paymentStatus tracks the online-paid HANDLING FEE only —
+// never the whole order — so it gets its own wording rather than reusing
+// "Paid"/"Pending" as-is.
+function paymentDisplay(order) {
+  const { paymentMethod, paymentStatus } = order;
+
+  if (paymentMethod === 'cod') {
+    switch (paymentStatus) {
+      case 'cod_fee_paid':
+        return { label: 'COD · fee paid online', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+      case 'cod_fee_pending':
+        return { label: 'COD · fee pending', cls: 'bg-amber-50 text-amber-700 border-amber-200' };
+      case 'failed':
+        return { label: 'COD · fee payment failed', cls: 'bg-red-50 text-red-700 border-red-200' };
+      case 'pending':
+      default:
+        // No online fee for this order — the whole amount is cash on delivery.
+        return { label: 'COD', cls: 'bg-brand-ink/5 text-brand-ink/70 border-brand-ink/10' };
+    }
+  }
+
+  switch (paymentStatus) {
+    case 'paid':
+      return { label: 'Paid', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+    case 'pending':
+      return { label: 'Pending', cls: 'bg-amber-50 text-amber-700 border-amber-200' };
+    case 'failed':
+      return { label: 'Failed', cls: 'bg-red-50 text-red-700 border-red-200' };
+    case 'refunded':
+      return { label: 'Refunded', cls: 'bg-brand-ink/5 text-brand-ink/70 border-brand-ink/10' };
+    default:
+      return { label: paymentStatus || '—', cls: 'bg-brand-ink/5 text-brand-ink/70 border-brand-ink/10' };
+  }
+}
+
+function PaymentBadge({ order }) {
+  const { label, cls } = paymentDisplay(order);
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
 export default function AdminOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [status, setStatus] = useState('');
@@ -66,7 +111,7 @@ export default function AdminOrdersPage() {
                   <td className="p-3 font-medium">{o.orderNumber}</td>
                   <td className="p-3">{o.customer?.name}<br /><span className="text-xs text-brand-ink/50">{o.customer?.phone}</span></td>
                   <td className="p-3">{formatINR(o.total)}</td>
-                  <td className="p-3 capitalize">{o.paymentStatus}</td>
+                  <td className="p-3"><PaymentBadge order={o} /></td>
                   <td className="p-3 capitalize">{o.status}</td>
                   <td className="p-3 text-xs text-brand-ink/50">{new Date(o.createdAt).toLocaleDateString('en-IN')}</td>
                   <td className="p-3"><Link href={`/admin/orders/${o._id}`} className="text-brand-magenta font-medium">View</Link></td>

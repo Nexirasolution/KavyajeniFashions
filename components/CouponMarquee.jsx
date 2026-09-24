@@ -3,19 +3,37 @@
 import { useEffect, useState } from 'react';
 import { Tag, Truck } from 'lucide-react';
 
+// ⚠️ Set this to the URL of your settings GET route (the one that returns { settings }).
+const SETTINGS_URL = '/api/settings';
+
+// freeShippingAbove lives on the default rule. 0 means "never free".
+function getFreeShippingThreshold(settings) {
+  const value = Number(settings?.defaultRule?.freeShippingAbove);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 export default function CouponMarquee() {
   const [coupons, setCoupons] = useState([]);
+  const [freeShippingMin, setFreeShippingMin] = useState(null);
 
   useEffect(() => {
     fetch('/api/coupons?active=true')
       .then((r) => r.json())
       .then((d) => setCoupons(d.coupons || []))
       .catch(() => {});
+
+    fetch(SETTINGS_URL)
+      .then((r) => r.json())
+      .then((d) => setFreeShippingMin(getFreeShippingThreshold(d.settings)))
+      .catch(() => {});
   }, []);
 
-  const freeShippingItem = { type: 'freeshipping', minOrderValue: 1199 };
+  // Only show the free shipping message when settings define a threshold.
+  const freeShippingItem = freeShippingMin
+    ? [{ type: 'freeshipping', minOrderValue: freeShippingMin }]
+    : [];
 
-  const allItems = [...coupons, freeShippingItem];
+  const allItems = [...coupons, ...freeShippingItem];
 
   if (!allItems.length) return null;
 
