@@ -192,14 +192,14 @@ export default function ProductPageClient({ data }) {
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-brand-ink mt-1 leading-tight">{product.name}</h1>
 
           {/* Rating */}
-          <div className="flex items-center gap-2 mt-2">
+          {/* <div className="flex items-center gap-2 mt-2">
             <div className="flex items-center gap-0.5">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Star key={i} size={14} className={i < Math.round(product.rating) ? 'fill-brand-gold text-brand-gold' : 'text-brand-ink/20'} />
               ))}
             </div>
             <span className="text-sm text-brand-ink/50">({product.reviewCount} reviews)</span>
-          </div>
+          </div> */}
 
           {/* Price */}
           <div className="mt-4 bg-brand-cream rounded-xl p-4">
@@ -267,7 +267,7 @@ export default function ProductPageClient({ data }) {
       </div>
 
       {/* Reviews */}
-      {reviews?.length > 0 && (
+      {/* {reviews?.length > 0 && (
         <div className="mt-14">
           <h2 className="font-display text-xl font-bold text-brand-ink mb-5">Customer Reviews</h2>
           <div className="grid sm:grid-cols-2 gap-4">
@@ -284,7 +284,7 @@ export default function ProductPageClient({ data }) {
             ))}
           </div>
         </div>
-      )}
+      )} */}
 
       {/* Related */}
       {related?.length > 0 && (
