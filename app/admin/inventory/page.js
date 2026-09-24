@@ -886,7 +886,7 @@ export default function AdminInventoryPage() {
                   in {selectedCatCount} {plural(selectedCatCount, 'category', 'categories')}
                 </span>
               </p>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setSelected(new Set())}
@@ -1321,6 +1321,9 @@ function SizeCell({ size, sku, saved, value, label, disabled, onChange, onEnter 
 
 /* -------------------------------- modals -------------------------------- */
 
+// The footer buttons are laid out full-width and stacked on narrow screens
+// (so a long label like "Download images" never gets clipped or forces
+// horizontal scrolling), and as a normal right-aligned row from `sm` up.
 function Modal({ title, onClose, busy, children, footer }) {
   useEffect(() => {
     const onKey = (e) => {
@@ -1331,27 +1334,33 @@ function Modal({ title, onClose, busy, children, footer }) {
   }, [onClose, busy]);
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center p-4" role="dialog" aria-modal="true" aria-label={title}>
+    <div className="fixed inset-0 z-50 grid place-items-center p-3 sm:p-4" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
-      <div className="relative max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
+      <div className="relative max-h-[92vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl sm:p-5">
         <div className="mb-4 flex items-start justify-between gap-3">
-          <h2 className="font-display text-xl font-bold text-brand-magenta">{title}</h2>
+          <h2 className="font-display text-lg font-bold text-brand-magenta sm:text-xl">{title}</h2>
           <button
             type="button"
             onClick={onClose}
             disabled={busy}
             aria-label="Close"
-            className="rounded p-1 text-brand-ink/40 hover:text-brand-ink/70 disabled:opacity-40"
+            className="shrink-0 rounded p-1 text-brand-ink/40 hover:text-brand-ink/70 disabled:opacity-40"
           >
             <X size={18} />
           </button>
         </div>
         {children}
-        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">{footer}</div>
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+          {footer}
+        </div>
       </div>
     </div>
   );
 }
+
+// Shared classes for footer buttons: full-width + centered on mobile,
+// natural width + left-aligned content from `sm` up.
+const FOOTER_BTN = 'w-full justify-center sm:w-auto';
 
 const BULK_MODES = [
   { id: 'set', label: 'Set every size to', needsValue: true },
@@ -1380,7 +1389,7 @@ function BulkStockModal({ products, unsavedCount, busy, onClose, onApply }) {
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50"
+            className={`rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 ${FOOTER_BTN}`}
           >
             Cancel
           </button>
@@ -1388,7 +1397,7 @@ function BulkStockModal({ products, unsavedCount, busy, onClose, onApply }) {
             type="button"
             onClick={() => onApply(mode, numeric)}
             disabled={busy || !valid}
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className={`inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOOTER_BTN}`}
           >
             {busy && <Loader2 size={15} className="animate-spin" />}
             Apply to {products.length} {plural(products.length, 'product')}
@@ -1404,7 +1413,7 @@ function BulkStockModal({ products, unsavedCount, busy, onClose, onApply }) {
         {BULK_MODES.map((m) => (
           <label
             key={m.id}
-            className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors ${
+            className={`flex cursor-pointer flex-wrap items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors ${
               mode === m.id ? 'border-brand-magenta bg-brand-magenta/5' : 'border-brand-ink/10 hover:border-brand-magenta/40'
             }`}
           >
@@ -1484,7 +1493,7 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50"
+            className={`rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 ${FOOTER_BTN}`}
           >
             Cancel
           </button>
@@ -1492,7 +1501,7 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
             type="button"
             onClick={onConfirm}
             disabled={busy || !canDelete}
-            className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className={`inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50 ${FOOTER_BTN}`}
           >
             {busy ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
             Delete {products.length} {plural(products.length, 'product')}
@@ -1566,13 +1575,37 @@ function ShareModal({ products, onClose }) {
     try {
       if (nativeShareSupported) {
         const files = hasImages ? await collectShareImageFiles(products) : [];
-        const canShareFiles = files.length > 0 && navigator.canShare && navigator.canShare({ files });
+
+        // Try sharing WITH images first whenever we actually have files.
+        // Some browsers (many Android WebViews, some Samsung Internet
+        // versions) support navigator.share({ files }) but don't implement
+        // navigator.canShare at all — treating a missing canShare as "can't
+        // share files" was the bug: it silently dropped every image and
+        // shared text-only, even when the share sheet could have handled
+        // them fine. Now we only skip the files payload when canShare
+        // EXISTS and explicitly says no.
+        if (files.length > 0) {
+          const filesRejected = typeof navigator.canShare === 'function' && !navigator.canShare({ files });
+          if (!filesRejected) {
+            try {
+              await navigator.share({ text: message, files });
+              onClose();
+              return;
+            } catch (err) {
+              if (err?.name === 'AbortError') return; // admin cancelled the share sheet — not an error
+              // Some browsers accept the files check but then throw at share()
+              // time (e.g. a file type they don't actually support) — fall
+              // back to a text-only native share before giving up on it.
+            }
+          }
+        }
+
         try {
-          await navigator.share(canShareFiles ? { text: message, files } : { text: message });
+          await navigator.share({ text: message });
           onClose();
           return;
         } catch (err) {
-          if (err?.name === 'AbortError') return; // admin cancelled the share sheet — not an error
+          if (err?.name === 'AbortError') return;
           // otherwise fall through to the WhatsApp link fallback below
         }
       }
@@ -1609,7 +1642,7 @@ function ShareModal({ products, onClose }) {
             type="button"
             onClick={onClose}
             disabled={sharing || downloading}
-            className="rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50"
+            className={`rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 ${FOOTER_BTN}`}
           >
             Close
           </button>
@@ -1618,7 +1651,7 @@ function ShareModal({ products, onClose }) {
               type="button"
               onClick={handleDownloadClick}
               disabled={sharing || downloading}
-              className="inline-flex items-center gap-2 rounded-lg border border-brand-ink/10 px-3 py-2 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-50"
+              className={`inline-flex items-center gap-2 rounded-lg border border-brand-ink/10 px-3 py-2 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-50 ${FOOTER_BTN}`}
             >
               {downloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
               Download images
@@ -1628,7 +1661,7 @@ function ShareModal({ products, onClose }) {
             type="button"
             onClick={handleShareClick}
             disabled={sharing || downloading}
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className={`inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOOTER_BTN}`}
           >
             {sharing ? <Loader2 size={15} className="animate-spin" /> : <Share2 size={15} />}
             Share via WhatsApp
@@ -1645,7 +1678,7 @@ function ShareModal({ products, onClose }) {
       {hasImages && (
         <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
           {products.map((p) => (
-            <div key={p._id} className="flex w-20 shrink-0 flex-col items-center gap-1">
+            <div key={p._id} className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-20">
               <Thumb product={p} />
               <p className="w-full truncate text-center text-[11px] text-brand-ink/60">{p.name}</p>
             </div>
@@ -1658,10 +1691,10 @@ function ShareModal({ products, onClose }) {
       </label>
       <textarea
         id="share-message"
-        rows={8}
+        rows={6}
         value={message}
         onChange={(e) => setMessage(e.target.value)}
-        className="w-full rounded-lg border border-brand-ink/10 px-3 py-2 text-sm focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
+        className="w-full resize-y rounded-lg border border-brand-ink/10 px-3 py-2 text-sm focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
       />
       <p className="mt-1 text-xs text-brand-ink/50">
         Edit freely — this is exactly what gets shared. Price is never included.
