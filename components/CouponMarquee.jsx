@@ -3,18 +3,9 @@
 import { useEffect, useState } from 'react';
 import { Tag, Truck } from 'lucide-react';
 
-// ⚠️ Set this to the URL of your settings GET route (the one that returns { settings }).
-const SETTINGS_URL = '/api/settings';
-
-// freeShippingAbove lives on the default rule. 0 means "never free".
-function getFreeShippingThreshold(settings) {
-  const value = Number(settings?.defaultRule?.freeShippingAbove);
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-
 export default function CouponMarquee() {
   const [coupons, setCoupons] = useState([]);
-  const [freeShippingMin, setFreeShippingMin] = useState(null);
+  const [freeShipping, setFreeShipping] = useState(null);
 
   useEffect(() => {
     fetch('/api/coupons?active=true')
@@ -22,16 +13,15 @@ export default function CouponMarquee() {
       .then((d) => setCoupons(d.coupons || []))
       .catch(() => {});
 
-    fetch(SETTINGS_URL)
+    // Free shipping amount comes from admin settings (see
+    // app/api/shipping/free-shipping/route.js).
+    fetch('/api/shipping/free-shipping')
       .then((r) => r.json())
-      .then((d) => setFreeShippingMin(getFreeShippingThreshold(d.settings)))
+      .then((d) => setFreeShipping(d.freeShipping || null))
       .catch(() => {});
   }, []);
 
-  // Only show the free shipping message when settings define a threshold.
-  const freeShippingItem = freeShippingMin
-    ? [{ type: 'freeshipping', minOrderValue: freeShippingMin }]
-    : [];
+  const freeShippingItem = freeShipping ? [{ type: 'freeshipping', ...freeShipping }] : [];
 
   const allItems = [...coupons, ...freeShippingItem];
 
@@ -48,6 +38,7 @@ export default function CouponMarquee() {
             <span key={i} className="inline-flex items-center gap-2 mx-8 text-xs font-semibold">
               <Truck size={11} className="shrink-0" />
               FREE SHIPPING on orders above ₹{c.minOrderValue}
+              {c.state && <span className="text-white/70"> in {c.state}</span>}
             </span>
           ) : (
             <span key={i} className="inline-flex items-center gap-2 mx-8 text-xs font-semibold">
