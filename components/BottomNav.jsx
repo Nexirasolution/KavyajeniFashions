@@ -11,6 +11,10 @@ export default function BottomNav() {
   const { count: cartCount } = useCart();
   const { wishlist } = useWishlist();
 
+  // Admin has its own layout/navigation — the storefront bottom nav
+  // shouldn't show there.
+  if (pathname.startsWith('/admin')) return null;
+
   const wishlistCount = wishlist?.length || 0;
 
   const items = [
