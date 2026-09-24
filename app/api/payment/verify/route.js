@@ -30,8 +30,14 @@ export async function POST(req) {
       return NextResponse.json({ error: 'Order not found' }, { status: 404 });
     }
 
-    if (order.paymentStatus !== 'paid') {
-      order.paymentStatus = 'paid';
+    // A COD order only ever charges the handling fee online — the rest is
+    // cash on delivery, so it must never be marked 'paid' (that would say
+    // the whole order is settled). Every other order is a full online payment.
+    const isCodFeeCharge = order.paymentMethod === 'cod';
+    const paidStatus = isCodFeeCharge ? 'cod_fee_paid' : 'paid';
+
+    if (order.paymentStatus !== paidStatus) {
+      order.paymentStatus = paidStatus;
       order.razorpayPaymentId = razorpay_payment_id;
       order.expiresAt = undefined;
       await order.save();

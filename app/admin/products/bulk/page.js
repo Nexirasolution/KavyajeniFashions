@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
-import { Loader2, Upload, X, ArrowLeft } from 'lucide-react';
+import { Loader2, Upload, X, ArrowLeft, RefreshCw } from 'lucide-react';
 
 const SIZE_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'Free Size', '32', '34', '36', '38', '40', '75', '80', '85', '90', '95', '100'];
 const GROUP_OPTIONS = [
@@ -73,6 +73,18 @@ function useImageQueue() {
   return { items, addFiles, removeItem, updateItem };
 }
 
+// Turns low-level failures into something an admin can act on.
+function describeUploadError(err) {
+  const msg = err?.message || 'Upload failed';
+  // fetch() throws a TypeError ("Failed to fetch" / "Load failed" / "NetworkError…")
+  // when the request is blocked before any response arrives. For a direct
+  // browser -> R2 PUT this is almost always a missing/incorrect CORS policy.
+  if (err instanceof TypeError) {
+    return 'Network or CORS error. Check the R2 bucket CORS policy and your internet connection.';
+  }
+  return msg;
+}
+
 export default function BulkUploadPage() {
   const router = useRouter();
   const { items, addFiles, removeItem, updateItem } = useImageQueue();
@@ -134,6 +146,7 @@ export default function BulkUploadPage() {
   }, [items, groupSize]);
 
   const hasIncompleteGroup = items.length > 0 && items.length % groupSize !== 0;
+  const failedCount = items.filter((i) => i.error && !i.uploading).length;
 
   // Uploads straight from the browser to R2 using a presigned PUT url from
   // /api/upload/presign. This avoids the ~4.5MB serverless body limit.
@@ -141,6 +154,7 @@ export default function BulkUploadPage() {
   async function uploadOne(item) {
     updateItem(item.id, { uploading: true, error: '' });
     try {
+      // Step 1: ask the server for a signed URL
       const presignRes = await fetch('/api/upload/presign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -151,25 +165,40 @@ export default function BulkUploadPage() {
           folder: 'uploads',
         }),
       });
-      const presign = await presignRes.json();
-      if (!presignRes.ok) throw new Error(presign.error || 'Could not start upload');
+      const presign = await presignRes.json().catch(() => ({}));
+      if (!presignRes.ok) {
+        throw new Error(
+          presign.error ||
+            (presignRes.status === 401 || presignRes.status === 403
+              ? 'Not authorized. Please log in as admin again.'
+              : `Could not start upload (${presignRes.status})`)
+        );
+      }
 
-      // R2 presign returns a single PUT url — send the raw file body with
-      // the same Content-Type that was signed, no FormData involved.
+      // Step 2: PUT the raw file to R2. The headers must be exactly the ones
+      // that were signed (Content-Type, Cache-Control), so use what the
+      // server returned rather than hard-coding them here.
       const res = await fetch(presign.uploadUrl, {
         method: 'PUT',
-        headers: { 'Content-Type': item.file.type },
+        headers: presign.headers || { 'Content-Type': item.file.type },
         body: item.file,
       });
       if (!res.ok) {
-        throw new Error(`Upload failed (${res.status})`);
+        // R2 replies with an XML body that names the exact problem
+        // (e.g. SignatureDoesNotMatch, AccessDenied), so surface it.
+        const text = await res.text().catch(() => '');
+        const code = text.match(/<Code>(.*?)<\/Code>/)?.[1];
+        const detail = code || text.replace(/<[^>]+>/g, ' ').trim().slice(0, 120);
+        throw new Error(`Upload rejected (${res.status})${detail ? `: ${detail}` : ''}`);
       }
 
       updateItem(item.id, { uploading: false, url: presign.publicUrl });
       return presign.publicUrl;
     } catch (err) {
-      updateItem(item.id, { uploading: false, error: err.message });
-      throw err;
+      const message = describeUploadError(err);
+      console.error('Image upload failed:', item.file.name, err);
+      updateItem(item.id, { uploading: false, error: message });
+      throw new Error(message);
     }
   }
 
@@ -209,6 +238,14 @@ export default function BulkUploadPage() {
     return { ok, urlById };
   }
 
+  // Re-tries only the images that failed (or never uploaded), without
+  // creating any products.
+  async function handleRetryFailed() {
+    const { ok } = await uploadAllPending();
+    if (ok) toast.success('All images uploaded');
+    else toast.error('Some images still failed. See the reason under each image.');
+  }
+
   async function handleSubmit() {
     if (!items.length) return toast.error('Select at least one image');
     if (!common.name) return toast.error('Enter a product name');
@@ -217,7 +254,7 @@ export default function BulkUploadPage() {
 
     const { ok, urlById } = await uploadAllPending();
     if (!ok) {
-      toast.error('Some images failed to upload. Hover over "Failed" for the reason, then retry or remove them.');
+      toast.error('Some images failed to upload. See the reason under each image, then retry or remove them.');
       return;
     }
 
@@ -389,21 +426,33 @@ export default function BulkUploadPage() {
 
       {/* Image selection */}
       <div className="card-soft p-5 mb-5">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
           <p className="text-sm font-medium">Images</p>
-          <label className="btn-outline text-sm flex items-center gap-1 cursor-pointer">
-            <Upload size={16} /> Select Images
-            <input
-              type="file"
-              accept={ACCEPTED_TYPES.join(',')}
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files?.length) addFiles(e.target.files);
-                e.target.value = ''; // allow re-selecting the same file
-              }}
-            />
-          </label>
+          <div className="flex items-center gap-2">
+            {failedCount > 0 && (
+              <button
+                type="button"
+                onClick={handleRetryFailed}
+                disabled={busy}
+                className="btn-outline text-sm flex items-center gap-1 disabled:opacity-40"
+              >
+                <RefreshCw size={14} /> Retry {failedCount} failed
+              </button>
+            )}
+            <label className="btn-outline text-sm flex items-center gap-1 cursor-pointer">
+              <Upload size={16} /> Select Images
+              <input
+                type="file"
+                accept={ACCEPTED_TYPES.join(',')}
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files?.length) addFiles(e.target.files);
+                  e.target.value = ''; // allow re-selecting the same file
+                }}
+              />
+            </label>
+          </div>
         </div>
 
         {items.length === 0 && <p className="text-brand-ink/40 text-sm py-6 text-center">No images selected yet.</p>}
@@ -413,34 +462,42 @@ export default function BulkUploadPage() {
             <p className="text-xs font-medium text-brand-ink/50 mb-2">
               Product {gIdx + 1} {groupSize > 1 ? `(${group.length} image${group.length > 1 ? 's' : ''})` : ''}
             </p>
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-3 items-start">
               {group.map((item) => (
-                <div key={item.id} className="relative w-20 h-20 rounded-lg overflow-hidden border border-brand-ink/10 bg-brand-cream">
-                  <img src={item.previewUrl} alt="" className="w-full h-full object-cover" />
-                  {item.uploading && (
-                    <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
-                      <Loader2 size={16} className="animate-spin text-brand-magenta" />
-                    </div>
-                  )}
-                  {item.url && !item.uploading && (
-                    <span className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-brand-green/80 text-white">Uploaded</span>
-                  )}
-                  {item.error && !item.uploading && (
-                    <span
-                      title={item.error}
-                      className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-red-500/90 text-white cursor-help"
+                <div key={item.id} className="w-24">
+                  <div className="relative w-24 h-24 rounded-lg overflow-hidden border border-brand-ink/10 bg-brand-cream">
+                    <img src={item.previewUrl} alt="" className="w-full h-full object-cover" />
+                    {item.uploading && (
+                      <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                        <Loader2 size={16} className="animate-spin text-brand-magenta" />
+                      </div>
+                    )}
+                    {item.url && !item.uploading && (
+                      <span className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-brand-green/80 text-white">Uploaded</span>
+                    )}
+                    {item.error && !item.uploading && (
+                      <span
+                        title={item.error}
+                        className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-red-500/90 text-white cursor-help"
+                      >
+                        Failed
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => removeItem(item.id)}
+                      className="absolute top-0.5 right-0.5 bg-black/50 text-white rounded-full p-0.5 disabled:opacity-40"
                     >
-                      Failed
-                    </span>
+                      <X size={12} />
+                    </button>
+                  </div>
+                  {/* Visible reason (hover tooltips don't work on touch screens) */}
+                  {item.error && !item.uploading && (
+                    <p className="text-[10px] leading-tight text-red-600 mt-1 break-words" title={item.error}>
+                      {item.error}
+                    </p>
                   )}
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => removeItem(item.id)}
-                    className="absolute top-0.5 right-0.5 bg-black/50 text-white rounded-full p-0.5 disabled:opacity-40"
-                  >
-                    <X size={12} />
-                  </button>
                 </div>
               ))}
             </div>

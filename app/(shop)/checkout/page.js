@@ -52,6 +52,9 @@ export default function CheckoutPage() {
   const codFee = paymentMethod === 'cod' && codAvailable ? cod.fee : 0;
 
   const total = shipping !== null ? Math.round(discountedSubtotal + shipping + codFee) : null;
+  // Amount that will actually be collected in cash at the doorstep for a COD
+  // order — everything except the COD handling fee, which is now paid online.
+  const codCashDue = total !== null ? Math.round(total - codFee) : null;
 
   // Stable string so the quote effect doesn't re-run on every render.
   const itemsKey = JSON.stringify(
@@ -246,22 +249,32 @@ export default function CheckoutPage() {
         return;
       }
 
-      // Cash on Delivery: the order is already placed, no payment modal.
-      if (orderData.cod) {
+      // Pure Cash on Delivery — no online charge at all (e.g. COD fee is 0
+      // for this state/order). Order is placed directly, nothing to pay now.
+      // The backend should only return this shape when there's no fee to collect.
+      if (orderData.cod && !orderData.order) {
         clearCart();
         router.push(`/order-success/${orderData.dbOrderId}`);
         setSubmitting(false);
         return;
       }
 
+      // Either a full online payment, or a COD order that still has a COD
+      // handling fee to collect online. In both cases the backend returns a
+      // Razorpay order — for COD, `rzpOrder.amount` should be just the fee,
+      // not the full order total. `orderData.cod` tells us which case we're in.
       const { order: rzpOrder, keyId, dbOrderId } = orderData;
+      const isCodFeePayment = !!orderData.cod;
 
       const rzp = new window.Razorpay({
         key: keyId,
         amount: rzpOrder.amount,
         currency: 'INR',
-        name: 'Lakshmibala Clothing Store',
+        name: 'Kavyajeni Nighties',
         order_id: rzpOrder.id,
+        description: isCodFeePayment
+          ? `COD handling charge — ${formatINR(codCashDue)} balance due in cash on delivery`
+          : undefined,
         prefill: { name: form.name, contact: form.phone, email: form.email },
         theme: { color: '#C2185B' },
         handler: async function (response) {
@@ -320,7 +333,9 @@ export default function CheckoutPage() {
             ? 'Calculating shipping…'
             : total !== null
               ? paymentMethod === 'cod'
-                ? `Place COD Order · ${formatINR(total)}`
+                ? codFee > 0
+                  ? `Pay ${formatINR(codFee)} COD charge online`
+                  : `Place COD Order · ${formatINR(total)}`
                 : `Pay ${formatINR(total)}`
               : 'Proceed to Pay';
 
@@ -563,7 +578,7 @@ export default function CheckoutPage() {
               </div>
               {codFee > 0 && (
                 <div className="flex justify-between">
-                  <span className="text-brand-ink/70">COD charge</span>
+                  <span className="text-brand-ink/70">COD charge (paid online now)</span>
                   <span>{formatINR(codFee)}</span>
                 </div>
               )}
@@ -575,6 +590,12 @@ export default function CheckoutPage() {
                 {total !== null ? formatINR(total) : '—'}
               </span>
             </div>
+
+            {paymentMethod === 'cod' && codFee > 0 && codCashDue !== null && (
+              <p className="text-xs text-brand-ink/60 mt-1">
+                Pay {formatINR(codFee)} online now, and {formatINR(codCashDue)} in cash on delivery.
+              </p>
+            )}
           </div>
 
           {/* Payment Method */}
@@ -605,7 +626,7 @@ export default function CheckoutPage() {
                 />
                 <span>
                   Cash on Delivery
-                  {codAvailable && cod.fee > 0 ? ` (+${formatINR(cod.fee)} COD charge)` : ''}
+                  {codAvailable && cod.fee > 0 ? ` (+${formatINR(cod.fee)} COD charge, paid online)` : ''}
                 </span>
               </label>
 

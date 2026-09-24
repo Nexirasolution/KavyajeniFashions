@@ -4,6 +4,11 @@ import { getRazorpay } from '@/lib/razorpay';
 import Order from '@/models/Order';
 import { rollbackStock, releaseCoupon } from '@/lib/orderCreation';
 
+// Any order whose paymentStatus is one of these still has money outstanding
+// online and stock held against it — a plain online order, or a COD order
+// still waiting on its handling fee.
+const PENDING_STATUSES = ['pending', 'cod_fee_pending'];
+
 // Called when the customer explicitly closes the Razorpay modal without
 // paying — releases stock immediately instead of waiting for the cron
 // sweep. Double-checks with Razorpay first in case payment actually
@@ -15,7 +20,7 @@ export async function POST(req) {
     if (!dbOrderId) return NextResponse.json({ error: 'Missing order id' }, { status: 400 });
 
     const order = await Order.findById(dbOrderId);
-    if (!order || order.paymentStatus !== 'pending') {
+    if (!order || !PENDING_STATUSES.includes(order.paymentStatus)) {
       return NextResponse.json({ ok: true }); // nothing to release
     }
 

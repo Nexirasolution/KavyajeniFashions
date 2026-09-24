@@ -51,9 +51,16 @@ const OrderSchema = new mongoose.Schema(
     total: Number,
     // 'razorpay' = paid online, 'cod' = Cash on Delivery.
     paymentMethod: { type: String, enum: ['razorpay', 'cod'], default: 'razorpay' },
-    // For COD, paymentStatus stays 'pending' until the cash is collected;
-    // set it to 'paid' from the admin panel after delivery.
-    paymentStatus: { type: String, enum: ['pending', 'paid', 'failed', 'refunded'], default: 'pending' },
+    // 'pending' = zero-fee COD order, or a plain online order awaiting payment.
+    // 'cod_fee_pending' = COD order created, waiting on its handling-fee charge.
+    // 'cod_fee_paid' = COD order's fee is settled online; the rest is cash on
+    //   delivery — set to 'paid' from the admin panel once that cash is collected.
+    // 'paid' = a plain online order, fully settled.
+    paymentStatus: {
+      type: String,
+      enum: ['pending', 'cod_fee_pending', 'cod_fee_paid', 'paid', 'failed', 'refunded'],
+      default: 'pending'
+    },
     razorpayOrderId: String,
     razorpayPaymentId: String,
     status: {
@@ -67,10 +74,12 @@ const OrderSchema = new mongoose.Schema(
       awbNumber: { type: String, default: '' }
     },
     notes: { type: String, default: '' },
-    // Set on creation to a short window (~15 min) for ONLINE orders only.
-    // The cron sweep cancels and releases stock for any online order still
-    // 'pending' past this time. COD orders never get an expiresAt, so the
-    // sweep can never touch them. Cleared once paymentStatus leaves 'pending'.
+    // Set on creation to a short window (~15 min) for any order with money
+    // still outstanding online — a plain online order, or a COD order with a
+    // fee still due ('pending' or 'cod_fee_pending'). The cron sweep cancels
+    // and releases stock for any such order still unpaid past this time.
+    // A zero-fee COD order never gets an expiresAt, so the sweep can't touch
+    // it. Cleared once paymentStatus reaches a settled state.
     expiresAt: { type: Date, default: null },
     // Exact stock deltas reserved for this order, kept separately from
     // `items` so a webhook or cron job — running long after the original

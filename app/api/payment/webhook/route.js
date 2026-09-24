@@ -4,6 +4,11 @@ import { dbConnect } from '@/lib/mongodb';
 import Order from '@/models/Order';
 import { rollbackStock, releaseCoupon } from '@/lib/orderCreation';
 
+// Any order whose paymentStatus is one of these still has money outstanding
+// online and stock held against it — a plain online order, or a COD order
+// still waiting on its handling fee.
+const PENDING_STATUSES = ['pending', 'cod_fee_pending'];
+
 // Razorpay calls this directly from their servers — independent of the
 // customer's browser. This is the reliable source of truth for order
 // finalization; /api/payment/verify is just a faster UX path.
@@ -34,18 +39,24 @@ export async function POST(req) {
     if (event.event === 'payment.captured') {
       const payment = event.payload.payment.entity;
       const order = await Order.findOne({ razorpayOrderId: payment.order_id });
-      if (order && order.paymentStatus !== 'paid') {
-        order.paymentStatus = 'paid';
-        order.razorpayPaymentId = payment.id;
-        order.expiresAt = undefined;
-        await order.save();
+      if (order) {
+        // A COD order only ever charges the handling fee here — the rest is
+        // cash on delivery, so it must land in 'cod_fee_paid', never 'paid'.
+        const isCodFeeCharge = order.paymentMethod === 'cod';
+        const paidStatus = isCodFeeCharge ? 'cod_fee_paid' : 'paid';
+        if (order.paymentStatus !== paidStatus) {
+          order.paymentStatus = paidStatus;
+          order.razorpayPaymentId = payment.id;
+          order.expiresAt = undefined;
+          await order.save();
+        }
       }
     }
 
     if (event.event === 'payment.failed') {
       const payment = event.payload.payment.entity;
       const order = await Order.findOne({ razorpayOrderId: payment.order_id });
-      if (order && order.paymentStatus === 'pending') {
+      if (order && PENDING_STATUSES.includes(order.paymentStatus)) {
         await rollbackStock(order.stockReservations);
         await releaseCoupon(order.couponCode);
         order.paymentStatus = 'failed';

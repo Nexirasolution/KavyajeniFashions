@@ -31,19 +31,15 @@ export async function POST(req) {
       return NextResponse.json({ error: 'Please select your state' }, { status: 400 });
     }
 
-    const razorpay = method === 'razorpay' ? getRazorpay() : null;
-    if (method === 'razorpay' && !razorpay) {
-      return NextResponse.json(
-        { error: 'Payment gateway is not configured. Add RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET in .env' },
-        { status: 500 }
-      );
-    }
+    // Razorpay is needed for a plain online order AND for a COD order that
+    // carries a fee to be paid online — only a zero-fee COD order skips it.
+    const razorpay = getRazorpay();
 
     const settings = await getShippingSettings();
     const rule = resolveRule(settings, shippingAddress.state);
 
     // Reserve stock atomically BEFORE the customer ever sees the payment
-    // modal (or, for COD, before the order is created).
+    // modal (or, for a zero-fee COD order, before the order is created).
     let reserved;
     try {
       reserved = await reserveItemsAndBuildOrder(items);
@@ -82,6 +78,18 @@ export async function POST(req) {
         codFee = cod.fee;
       }
 
+      // A Razorpay charge is needed for: any online order, or a COD order
+      // that has a fee to collect upfront. Only a zero-fee COD order needs
+      // no gateway at all.
+      const needsOnlineCharge = method === 'razorpay' || codFee > 0;
+      if (needsOnlineCharge && !razorpay) {
+        await release();
+        return NextResponse.json(
+          { error: 'Payment gateway is not configured. Add RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET in .env' },
+          { status: 500 }
+        );
+      }
+
       // Recompute discount + shipping server-side — never trust a client total.
       const couponResult = await applyCouponToSubtotal(couponCode, subtotal);
       const discount = couponResult.discount;
@@ -89,6 +97,9 @@ export async function POST(req) {
 
       const shippingFee = computeShipping(rule, subtotal - discount);
       const total = Math.round(subtotal - discount + shippingFee + codFee);
+      // For COD, this is what's actually charged online right now — just the
+      // fee. For a plain online order it's the same as `total`.
+      const amountDueOnline = method === 'cod' ? codFee : total;
 
       if (total <= 0) {
         await release();
@@ -107,15 +118,20 @@ export async function POST(req) {
         codFee,
         total,
         paymentMethod: method,
-        paymentStatus: 'pending', // COD stays 'pending' until cash is collected
+        // A zero-fee COD order is 'pending' (cash collected on delivery).
+        // A COD order WITH a fee is 'cod_fee_pending' until that fee clears
+        // Razorpay — verify() below is what should move it out of this state.
+        paymentStatus: method === 'cod' ? (codFee > 0 ? 'cod_fee_pending' : 'pending') : 'pending',
         status: 'placed',
         stockReservations: decremented,
-        // Only online orders expire — a COD order must never be swept by the cron.
-        expiresAt: method === 'razorpay' ? new Date(Date.now() + RESERVATION_WINDOW_MS) : undefined
+        // Anything with money still outstanding online (a plain online order,
+        // or a COD order with a fee) must expire if payment is abandoned —
+        // only a zero-fee COD order is exempt from the cron sweep.
+        expiresAt: needsOnlineCharge ? new Date(Date.now() + RESERVATION_WINDOW_MS) : undefined
       });
 
-      // ── Cash on Delivery: order is final, no payment gateway involved ──
-      if (method === 'cod') {
+      // ── Zero-fee Cash on Delivery: order is final, no payment gateway involved ──
+      if (method === 'cod' && codFee === 0) {
         return NextResponse.json({
           cod: true,
           dbOrderId: dbOrder._id,
@@ -124,11 +140,11 @@ export async function POST(req) {
         });
       }
 
-      // ── Online payment via Razorpay ──
+      // ── Online charge: either a full online payment, or just the COD fee ──
       let rzpOrder;
       try {
         rzpOrder = await razorpay.orders.create({
-          amount: total * 100, // paise
+          amount: amountDueOnline * 100, // paise
           currency: 'INR',
           receipt: dbOrder.orderNumber
         });
@@ -145,6 +161,7 @@ export async function POST(req) {
         order: rzpOrder,
         keyId: process.env.RAZORPAY_KEY_ID,
         dbOrderId: dbOrder._id,
+        cod: method === 'cod', // tells the client this Razorpay charge is the COD fee, not the full total
         total
       });
     } catch (err) {
