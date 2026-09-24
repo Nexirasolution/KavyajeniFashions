@@ -44,7 +44,7 @@ export default function AdminShell({ admin, children }) {
         }`}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-brand-pink/10">
-          <span className="font-display text-lg font-bold text-brand-magenta">LB Admin</span>
+          <span className="font-display text-lg font-bold text-brand-magenta">Kavyajeni Nighties Admin</span>
           <button className="lg:hidden" onClick={() => setOpen(false)}><X size={20} /></button>
         </div>
         <nav className="p-3 space-y-1 overflow-y-auto h-[calc(100vh-64px)]">

@@ -154,6 +154,32 @@ async function callBulk(payload) {
 // the products' images so they can be handed to the native share sheet alongside
 // the text. Price is never referenced anywhere here.
 
+// Chrome/Android refuses to share more than 10 files in one share call.
+// (navigator.canShare returns false, which used to silently drop ALL images.)
+const MAX_SHARE_FILES = 10;
+
+const EXT_TO_TYPE = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  avif: 'image/avif',
+};
+
+// Some image hosts answer with application/octet-stream or an empty type.
+// navigator.canShare rejects those, so work out a real image/* type.
+function imageTypeFrom(blob, src) {
+  if (blob.type && blob.type.startsWith('image/')) return blob.type;
+  const ext = (src.split('?')[0].split('.').pop() || '').toLowerCase();
+  return EXT_TO_TYPE[ext] || 'image/jpeg';
+}
+
+function extFromType(type) {
+  if (type === 'image/jpeg') return 'jpg';
+  return type.split('/')[1].split('+')[0]; // "svg+xml" -> "svg"
+}
+
 function slugify(name, i) {
   const base = (name || 'product').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   return `${base || 'product'}-${i + 1}`;
@@ -169,25 +195,49 @@ function buildDefaultShareMessage(products) {
   return lines.join('\n').trim();
 }
 
-// Fetches each product's thumbnail as a File, for navigator.share({ files }).
-// Images that fail (e.g. a host without permissive CORS headers) are silently
-// skipped rather than blocking the whole share.
-async function collectShareImageFiles(products) {
-  const files = [];
-  for (const [i, p] of products.entries()) {
-    const src = getThumb(p);
-    if (!src) continue;
+function isSameOrigin(src) {
+  try {
+    return new URL(src, window.location.href).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+// Gets an image as a Blob. Images on another domain usually can't be read by
+// the browser (CORS), so they are fetched through our own admin-only proxy
+// (app/api/admin/image-proxy). If the proxy fails, a direct fetch is tried.
+async function fetchImageBlob(src) {
+  if (!isSameOrigin(src) && !src.startsWith('data:')) {
     try {
-      const res = await fetch(src, { mode: 'cors' });
-      if (!res.ok) continue;
-      const blob = await res.blob();
-      const ext = (blob.type && blob.type.split('/')[1]) || 'jpg';
-      files.push(new File([blob], `${slugify(p.name, i)}.${ext}`, { type: blob.type || 'image/jpeg' }));
+      const res = await fetch(`/api/admin/image-proxy?url=${encodeURIComponent(src)}`);
+      if (res.ok) return await res.blob();
     } catch {
-      // CORS or network failure — this one image just won't be attachable automatically
+      // fall through to the direct fetch
     }
   }
-  return files;
+  const res = await fetch(src, { mode: 'cors' });
+  if (!res.ok) throw new Error('fetch failed');
+  return res.blob();
+}
+
+async function fetchImageFile(p, i) {
+  const src = getThumb(p);
+  if (!src) return null;
+  try {
+    const blob = await fetchImageBlob(src);
+    const type = imageTypeFrom(blob, src);
+    return new File([blob], `${slugify(p.name, i)}.${extFromType(type)}`, { type });
+  } catch {
+    return null; // CORS or network failure: this image can't be attached
+  }
+}
+
+// Fetches all images in parallel (much faster than one after another).
+// Images that fail (e.g. a host without permissive CORS headers) are skipped
+// rather than blocking the whole share.
+async function collectShareImageFiles(products) {
+  const results = await Promise.all(products.map((p, i) => fetchImageFile(p, i)));
+  return results.filter(Boolean);
 }
 
 // Downloads each product's thumbnail to the admin's device, for manual attaching
@@ -198,14 +248,12 @@ async function downloadProductImages(products) {
     const src = getThumb(p);
     if (!src) continue;
     try {
-      const res = await fetch(src, { mode: 'cors' });
-      if (!res.ok) throw new Error('fetch failed');
-      const blob = await res.blob();
-      const ext = (blob.type && blob.type.split('/')[1]) || 'jpg';
+      const blob = await fetchImageBlob(src);
+      const type = imageTypeFrom(blob, src);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${slugify(p.name, i)}.${ext}`;
+      a.download = `${slugify(p.name, i)}.${extFromType(type)}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1563,62 +1611,71 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
 // WhatsApp selectable as the target); falls back to a text-only WhatsApp link plus
 // a manual "Download images" option when the share sheet or image fetch isn't
 // available.
+//
+// The images are prepared as soon as the modal opens, so the Share button can
+// call navigator.share() straight away. Browsers only allow it shortly after a
+// tap; downloading images after the tap made it fail and fall back to text only.
 function ShareModal({ products, onClose }) {
   const [message, setMessage] = useState(() => buildDefaultShareMessage(products));
-  const [sharing, setSharing] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const nativeShareSupported = typeof navigator !== 'undefined' && !!navigator.share;
+  const [files, setFiles] = useState([]);
   const hasImages = products.some((p) => getThumb(p));
+  const [loadingImages, setLoadingImages] = useState(hasImages);
+  const [downloading, setDownloading] = useState(false);
+
+  const nativeShareSupported = typeof navigator !== 'undefined' && !!navigator.share;
+  const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+
+  // Only the first MAX_SHARE_FILES products can have their image attached.
+  const imageProducts = products.slice(0, MAX_SHARE_FILES);
+  const overLimit = products.length > MAX_SHARE_FILES;
+
+  // Prepare the images once, as soon as the modal opens.
+  useEffect(() => {
+    if (!hasImages) return undefined;
+    let cancelled = false;
+    collectShareImageFiles(imageProducts).then((f) => {
+      if (cancelled) return;
+      setFiles(f);
+      setLoadingImages(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleShareClick() {
-    setSharing(true);
-    try {
-      if (nativeShareSupported) {
-        const files = hasImages ? await collectShareImageFiles(products) : [];
+    if (nativeShareSupported) {
+      // Only skip the files when canShare EXISTS and says no.
+      const canAttach =
+        files.length > 0 && (typeof navigator.canShare !== 'function' || navigator.canShare({ files }));
 
-        // Try sharing WITH images first whenever we actually have files.
-        // Some browsers (many Android WebViews, some Samsung Internet
-        // versions) support navigator.share({ files }) but don't implement
-        // navigator.canShare at all — treating a missing canShare as "can't
-        // share files" was the bug: it silently dropped every image and
-        // shared text-only, even when the share sheet could have handled
-        // them fine. Now we only skip the files payload when canShare
-        // EXISTS and explicitly says no.
-        if (files.length > 0) {
-          const filesRejected = typeof navigator.canShare === 'function' && !navigator.canShare({ files });
-          if (!filesRejected) {
-            try {
-              await navigator.share({ text: message, files });
-              onClose();
-              return;
-            } catch (err) {
-              if (err?.name === 'AbortError') return; // admin cancelled the share sheet — not an error
-              // Some browsers accept the files check but then throw at share()
-              // time (e.g. a file type they don't actually support) — fall
-              // back to a text-only native share before giving up on it.
-            }
+      // No awaits before this point, so the tap permission is still valid.
+      try {
+        await navigator.share(canAttach ? { text: message, files } : { text: message });
+        onClose();
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return; // admin closed the share sheet
+        if (canAttach) {
+          // Files were refused at share time: retry with text only
+          try {
+            await navigator.share({ text: message });
+            onClose();
+            return;
+          } catch (err2) {
+            if (err2?.name === 'AbortError') return;
           }
         }
-
-        try {
-          await navigator.share({ text: message });
-          onClose();
-          return;
-        } catch (err) {
-          if (err?.name === 'AbortError') return;
-          // otherwise fall through to the WhatsApp link fallback below
-        }
       }
+    }
 
-      // Fallback: WhatsApp's click-to-chat link only carries text, never images.
-      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-      if (hasImages) {
-        toast('WhatsApp links can\'t carry images — use "Download images" below and attach them manually.', {
-          duration: 6000,
-        });
-      }
-    } finally {
-      setSharing(false);
+    // Fallback: WhatsApp's link can only carry text, never images.
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+    if (hasImages) {
+      toast('WhatsApp links can\'t carry images. Use "Download images" and attach them manually.', {
+        duration: 6000,
+      });
     }
   }
 
@@ -1631,17 +1688,20 @@ function ShareModal({ products, onClose }) {
     }
   }
 
+  const busy = downloading;
+  const shareDisabled = busy || loadingImages;
+
   return (
     <Modal
       title={`Share ${products.length} ${plural(products.length, 'product')}`}
       onClose={onClose}
-      busy={sharing || downloading}
+      busy={busy}
       footer={
         <>
           <button
             type="button"
             onClick={onClose}
-            disabled={sharing || downloading}
+            disabled={busy}
             className={`rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 ${FOOTER_BTN}`}
           >
             Close
@@ -1650,7 +1710,7 @@ function ShareModal({ products, onClose }) {
             <button
               type="button"
               onClick={handleDownloadClick}
-              disabled={sharing || downloading}
+              disabled={busy}
               className={`inline-flex items-center gap-2 rounded-lg border border-brand-ink/10 px-3 py-2 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-50 ${FOOTER_BTN}`}
             >
               {downloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
@@ -1660,30 +1720,51 @@ function ShareModal({ products, onClose }) {
           <button
             type="button"
             onClick={handleShareClick}
-            disabled={sharing || downloading}
+            disabled={shareDisabled}
             className={`inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOOTER_BTN}`}
           >
-            {sharing ? <Loader2 size={15} className="animate-spin" /> : <Share2 size={15} />}
-            Share via WhatsApp
+            {loadingImages ? <Loader2 size={15} className="animate-spin" /> : <Share2 size={15} />}
+            {loadingImages ? 'Preparing images…' : 'Share via WhatsApp'}
           </button>
         </>
       }
     >
       <p className="mb-3 text-sm text-brand-ink/60">
         {nativeShareSupported
-          ? 'Opens your share sheet with the images and message below — pick WhatsApp there. Price is never included.'
-          : "This browser can't attach images to WhatsApp automatically. WhatsApp opens with the message below — download the images and attach them yourself."}
+          ? 'Opens your share sheet with the images and message below. Pick WhatsApp there. Price is never included.'
+          : insecure
+            ? 'Image sharing needs a secure (https) page. On http, WhatsApp opens with text only. Use "Download images" and attach them yourself.'
+            : "This browser can't attach images to WhatsApp automatically. WhatsApp opens with the message below. Download the images and attach them yourself."}
       </p>
 
       {hasImages && (
         <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-          {products.map((p) => (
+          {imageProducts.map((p) => (
             <div key={p._id} className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-20">
               <Thumb product={p} />
               <p className="w-full truncate text-center text-[11px] text-brand-ink/60">{p.name}</p>
             </div>
           ))}
         </div>
+      )}
+
+      {hasImages && !loadingImages && nativeShareSupported && (
+        <p
+          className={`mb-3 text-xs font-medium ${
+            files.length === imageProducts.length ? 'text-emerald-700' : 'text-amber-700'
+          }`}
+        >
+          {files.length} of {imageProducts.length} {plural(imageProducts.length, 'image')} ready to attach
+          {files.length < imageProducts.length &&
+            '. The rest could not be loaded (the image host may block downloads from this site). Use "Download images" for those.'}
+        </p>
+      )}
+
+      {overLimit && (
+        <p className="mb-3 rounded-lg bg-brand-cream px-3 py-2 text-xs text-brand-ink/70">
+          Phones allow at most {MAX_SHARE_FILES} images per share, so only the first {MAX_SHARE_FILES} will be
+          attached. Select {MAX_SHARE_FILES} or fewer products to share all their images, or use "Download images".
+        </p>
       )}
 
       <label htmlFor="share-message" className="mb-1 block text-sm font-medium">
@@ -1697,7 +1778,7 @@ function ShareModal({ products, onClose }) {
         className="w-full resize-y rounded-lg border border-brand-ink/10 px-3 py-2 text-sm focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
       />
       <p className="mt-1 text-xs text-brand-ink/50">
-        Edit freely — this is exactly what gets shared. Price is never included.
+        Edit freely. This is exactly what gets shared. Price is never included.
       </p>
     </Modal>
   );
