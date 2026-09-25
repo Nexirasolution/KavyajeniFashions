@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { Plus, Pencil, Trash2, UploadCloud } from 'lucide-react';
 import { formatINR } from '@/lib/utils';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 100;
 
 export default function AdminProductsPage() {
   const [products, setProducts] = useState([]);

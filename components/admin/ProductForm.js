@@ -5,10 +5,8 @@ import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { Plus, Trash2, Upload, Loader2, X } from 'lucide-react';
 
-const SIZE_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'Free Size','32','34','36','38','40','75','80','85','90','95','100'];
-
 function emptyVariant() {
-  return { color: '', images: [''], price: '', compareAtPrice: '', sizes: [{ size: 'M', stock: 0, sku: '' }] };
+  return { color: '', images: [''], price: '', compareAtPrice: '', sizes: [{ size: '', stock: 0, sku: '' }] };
 }
 
 // Per-slot upload button with preview thumbnail
@@ -134,7 +132,7 @@ export default function ProductForm({ initial, productId }) {
   function addSize(vIdx) {
     setForm((f) => {
       const variants = [...f.variants];
-      variants[vIdx] = { ...variants[vIdx], sizes: [...variants[vIdx].sizes, { size: 'L', stock: 0, sku: '' }] };
+      variants[vIdx] = { ...variants[vIdx], sizes: [...variants[vIdx].sizes, { size: '', stock: 0, sku: '' }] };
       return { ...f, variants };
     });
   }
@@ -152,6 +150,14 @@ export default function ProductForm({ initial, productId }) {
 
   async function submit(e) {
     e.preventDefault();
+
+    for (const v of form.variants) {
+      if (v.sizes.some((s) => !String(s.size).trim())) {
+        toast.error('Enter a value for every size');
+        return;
+      }
+    }
+
     setSaving(true);
     const payload = {
       ...form,
@@ -161,7 +167,7 @@ export default function ProductForm({ initial, productId }) {
         price: Number(v.price),
         compareAtPrice: Number(v.compareAtPrice) || 0,
         images: v.images.filter(Boolean),
-        sizes: v.sizes.map((s) => ({ ...s, stock: Number(s.stock) })),
+        sizes: v.sizes.map((s) => ({ ...s, size: String(s.size).trim(), stock: Number(s.stock) })),
       })),
     };
     const url = productId ? `/api/products/${productId}` : '/api/products';
@@ -260,9 +266,12 @@ export default function ProductForm({ initial, productId }) {
             <p className="text-xs font-medium text-brand-ink/60 mb-1">Sizes & Stock</p>
             {v.sizes.map((s, sIdx) => (
               <div key={sIdx} className="flex gap-2 mb-2 items-center">
-                <select className="border rounded-lg px-2 py-1.5 text-sm" value={s.size} onChange={(e) => updateSize(vIdx, sIdx, 'size', e.target.value)}>
-                  {SIZE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
+                <input
+                  placeholder="Size (e.g. M, 32, Free Size)"
+                  className="border rounded-lg px-2 py-1.5 text-sm w-36"
+                  value={s.size}
+                  onChange={(e) => updateSize(vIdx, sIdx, 'size', e.target.value)}
+                />
                 <input type="number" placeholder="Stock" className="border rounded-lg px-2 py-1.5 text-sm w-24" value={s.stock} onChange={(e) => updateSize(vIdx, sIdx, 'stock', e.target.value)} />
                 <input placeholder="SKU (optional)" className="border rounded-lg px-2 py-1.5 text-sm flex-1" value={s.sku} onChange={(e) => updateSize(vIdx, sIdx, 'sku', e.target.value)} />
                 <button type="button" onClick={() => removeSize(vIdx, sIdx)} className="text-brand-magenta"><Trash2 size={14} /></button>

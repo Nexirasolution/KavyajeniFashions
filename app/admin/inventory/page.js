@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 
-const PAGE_SIZE = 50; // products per page
+const PAGE_SIZE = 100; // products per page
 const LOW_STOCK = 5; // a size with this many units or fewer counts as "low"
 const MAX_QTY = 100000;
 

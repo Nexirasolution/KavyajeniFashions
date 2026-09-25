@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { Loader2, Upload, X, ArrowLeft, RefreshCw } from 'lucide-react';
 
-const SIZE_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'Free Size', '32', '34', '36', '38', '40', '75', '80', '85', '90', '95', '100'];
 const GROUP_OPTIONS = [
   { value: 1, label: '1 image = 1 product' },
   { value: 2, label: '2 images = 1 product' },
@@ -130,7 +129,7 @@ export default function BulkUploadPage() {
     });
   }
   function addSize() {
-    setSizes((s) => [...s, { size: 'L', stock: 0, sku: '' }]);
+    setSizes((s) => [...s, { size: '', stock: 0, sku: '' }]);
   }
   function removeSize(idx) {
     setSizes((s) => s.filter((_, i) => i !== idx));
@@ -251,6 +250,7 @@ export default function BulkUploadPage() {
     if (!common.name) return toast.error('Enter a product name');
     if (!common.category) return toast.error('Select a category');
     if (!common.price) return toast.error('Enter a price');
+    if (sizes.some((s) => !String(s.size).trim())) return toast.error('Enter a value for every size');
 
     const { ok, urlById } = await uploadAllPending();
     if (!ok) {
@@ -279,7 +279,7 @@ export default function BulkUploadPage() {
           images: group.map((i) => urlById[i.id]).filter(Boolean),
           price: Number(common.price),
           compareAtPrice: Number(common.compareAtPrice) || 0,
-          sizes: sizes.map((s) => ({ ...s, stock: Number(s.stock) || 0 })),
+          sizes: sizes.map((s) => ({ ...s, size: String(s.size).trim(), stock: Number(s.stock) || 0 })),
         },
       ],
     }));
@@ -392,9 +392,12 @@ export default function BulkUploadPage() {
         <p className="text-sm font-medium mb-2">Sizes & Stock (applied to every product created)</p>
         {sizes.map((s, sIdx) => (
           <div key={sIdx} className="flex gap-2 mb-2 items-center">
-            <select className="border rounded-lg px-2 py-1.5 text-sm" value={s.size} onChange={(e) => updateSize(sIdx, 'size', e.target.value)}>
-              {SIZE_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-            </select>
+            <input
+              placeholder="Size (e.g. M, 32, Free Size)"
+              className="border rounded-lg px-2 py-1.5 text-sm w-36"
+              value={s.size}
+              onChange={(e) => updateSize(sIdx, 'size', e.target.value)}
+            />
             <input type="number" placeholder="Stock" className="border rounded-lg px-2 py-1.5 text-sm w-24" value={s.stock} onChange={(e) => updateSize(sIdx, 'stock', e.target.value)} />
             <input placeholder="SKU (optional)" className="border rounded-lg px-2 py-1.5 text-sm flex-1" value={s.sku} onChange={(e) => updateSize(sIdx, 'sku', e.target.value)} />
             <button type="button" onClick={() => removeSize(sIdx)} className="text-brand-magenta"><X size={14} /></button>

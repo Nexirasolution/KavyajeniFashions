@@ -114,11 +114,13 @@ export default function ProductCard({ product }) {
 
         {/* Info */}
         <div className="pt-2 px-2 sm:pt-2.5 sm:px-2.5">
-          <p className="text-xs sm:text-sm font-medium text-brand-ink line-clamp-1">{product.name}</p>
-          <div className="flex items-center gap-1 mt-0.5">
+          <p className="text-xs sm:text-sm font-medium text-brand-ink line-clamp-2 min-h-[2.2em] sm:min-h-[2.5em] leading-tight">
+            {product.name}
+          </p>
+          {/* <div className="flex items-center gap-1 mt-0.5">
             <Star className="w-2.5 h-2.5 sm:w-[11px] sm:h-[11px] fill-amber-400 text-amber-400" />
             <span className="text-[10px] sm:text-[11px] text-brand-ink/50">{product.rating || 'New'}</span>
-          </div>
+          </div> */}
           <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 sm:mt-1 flex-wrap">
             <span className="font-extrabold text-brand-magenta text-sm sm:text-base">{formatINR(price)}</span>
             {compareAt > price && (
