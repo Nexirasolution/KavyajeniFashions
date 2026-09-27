@@ -172,7 +172,7 @@ export default async function HomePage() {
       <ReviewSection reviews={reviews} />
 
       {/* Reels */}
-      <ReelsSection reels={reels} />
+      {/* <ReelsSection reels={reels} /> */}
 
     </div>
   );

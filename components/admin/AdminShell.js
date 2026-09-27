@@ -17,7 +17,7 @@ const NAV = [
   // { href: '/admin/combos', label: 'Combo Offers', icon: Layers },
   { href: '/admin/banners', label: 'Banners', icon: ImageIcon },
   // { href: '/admin/reels', label: 'Shop by Reels', icon: Clapperboard },
-  // { href: '/admin/reviews', label: 'Reviews', icon: Star },
+  { href: '/admin/reviews', label: 'Reviews', icon: Star },
   // { href: '/admin/coupons', label: 'Coupons', icon: Ticket },
   // { href: '/admin/reports', label: 'Sales Reports', icon: FileBarChart },
   { href: '/admin/settings', label: 'Settings', icon: SettingsIcon }

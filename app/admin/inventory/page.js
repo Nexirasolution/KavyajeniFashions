@@ -195,6 +195,19 @@ function buildDefaultShareMessage(products) {
   return lines.join('\n').trim();
 }
 
+// Some Android in-app browsers and WebViews implement navigator.share() but
+// don't actually forward `text`/`files` — they silently substitute the
+// current page's URL instead, so the admin ends up "sharing" a link to this
+// inventory page rather than the product images/message. There's no fix for
+// their behavior, so these are treated as if navigator.share doesn't exist
+// and sent straight to the wa.me text-link + manual download fallback,
+// which behaves predictably everywhere.
+function isUnreliableShareEnv() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /FBAN|FBAV|Instagram|Line\/|MicroMessenger|MiuiBrowser|; ?wv\)/i.test(ua);
+}
+
 function isSameOrigin(src) {
   try {
     return new URL(src, window.location.href).origin === window.location.origin;
@@ -1622,7 +1635,12 @@ function ShareModal({ products, onClose }) {
   const [loadingImages, setLoadingImages] = useState(hasImages);
   const [downloading, setDownloading] = useState(false);
 
-  const nativeShareSupported = typeof navigator !== 'undefined' && !!navigator.share;
+  // Native share is only trusted in environments known to actually forward
+  // `text`/`files` correctly. In-app browsers and certain WebViews silently
+  // replace the payload with the current page's URL, so those are treated
+  // as unsupported and sent to the wa.me + download fallback instead.
+  const nativeShareSupported =
+    typeof navigator !== 'undefined' && !!navigator.share && !isUnreliableShareEnv();
   const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
 
   // Only the first MAX_SHARE_FILES products can have their image attached.
