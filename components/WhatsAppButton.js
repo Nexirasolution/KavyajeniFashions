@@ -6,20 +6,21 @@
 // only want it there.
 //
 // Usage:
-//   <WhatsAppButton phone="919876543210" message="Hi, I have a question about my order" />
+//   <WhatsAppButton />
+//   <WhatsAppButton message="Hi, I have a question about my order" />
 //
 // `phone` must be in international format WITHOUT the leading + or 00
 // (e.g. 91 for India + 10-digit number).
 
 export default function WhatsAppButton({
-  phone = '919876543210',
+  phone = '918098232385',
   message = 'Hi! I have a question.',
 }) {
   const href = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 
   return (
-    <a
-      href={href}
+    
+     <a href={href}
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Chat with us on WhatsApp"

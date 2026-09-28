@@ -10,26 +10,123 @@ import {
   applyCouponToSubtotal
 } from '@/lib/orderCreation';
 import { getShippingSettings, getCodStatus, orderItemsToLines } from '@/lib/shipping';
-import { resolveRule, computeShipping } from '@/lib/shippingConfig';
+import { resolveRule, computeShipping, INDIAN_STATES } from '@/lib/shippingConfig';
 
 const RESERVATION_WINDOW_MS = 15 * 60 * 1000; // 15 min to complete online payment
+
+// ─────────────────────────── Address validation ───────────────────────────
+
+const norm = (s = '') => String(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z]/g, '');
+const str = (v) => (typeof v === 'string' ? v.trim() : '');
+
+function cleanPhone(p = '') {
+  let d = String(p).replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return d;
+}
+
+// Looks the pincode up on India Post. Returns:
+//   { status: 'valid', state }  | { status: 'invalid' } | { status: 'unknown' }
+// 'unknown' means the lookup service was unreachable — we fail open so a
+// third-party outage never blocks real customers from ordering.
+async function lookupPincode(pin) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 3000);
+  try {
+    const res = await fetch(`https://api.postalpincode.in/pincode/${pin}`, {
+      signal: ctrl.signal,
+      cache: 'no-store'
+    });
+    if (!res.ok) return { status: 'unknown' };
+    const data = await res.json();
+    const po = data?.[0]?.PostOffice;
+    if (data?.[0]?.Status === 'Success' && po?.length) {
+      return { status: 'valid', state: po[0].State };
+    }
+    if (data?.[0]?.Status === 'Error') return { status: 'invalid' };
+    return { status: 'unknown' };
+  } catch {
+    return { status: 'unknown' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Validates and normalises customer + address. Returns { error } or
+// { customer, address } containing only whitelisted, trimmed fields.
+async function validateAndCleanAddress(customer, shippingAddress) {
+  const a = shippingAddress || {};
+  const c = customer || {};
+
+  const name = str(c.name) || str(a.name);
+  const phone = cleanPhone(c.phone || a.phone);
+  const email = str(c.email) || str(a.email);
+  const line1 = str(a.line1);
+  const line2 = str(a.line2);
+  const city = str(a.city);
+  const pincode = str(a.pincode);
+  const landmark = str(a.landmark);
+
+  if (!/^[A-Za-z][A-Za-z\s.'-]{1,}$/.test(name)) {
+    return { error: 'Please enter your full name' };
+  }
+  if (!/^[6-9]\d{9}$/.test(phone)) {
+    return { error: 'Please enter a valid 10-digit mobile number' };
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    return { error: 'Please enter a valid email address' };
+  }
+  if (line1.length < 5) {
+    return { error: 'Please enter your house / street address' };
+  }
+  if (!/^[A-Za-z][A-Za-z\s.'-]{1,}$/.test(city)) {
+    return { error: 'Please enter a valid city' };
+  }
+
+  // State must be one of the known states (canonical spelling is used).
+  const state = INDIAN_STATES.find((s) => s === str(a.state));
+  if (!state) {
+    return { error: 'Please select a valid state' };
+  }
+
+  if (!/^[1-9]\d{5}$/.test(pincode)) {
+    return { error: 'Please enter a valid 6-digit pincode' };
+  }
+  const pin = await lookupPincode(pincode);
+  if (pin.status === 'invalid') {
+    return { error: 'This pincode does not exist' };
+  }
+  if (pin.status === 'valid' && norm(pin.state) !== norm(state)) {
+    return { error: `This pincode belongs to ${pin.state}, not ${state}` };
+  }
+
+  return {
+    customer: { name, phone, email },
+    address: { name, phone, email, line1, line2, city, state, pincode, landmark }
+  };
+}
+
+// ─────────────────────────────── Route ───────────────────────────────
 
 export async function POST(req) {
   try {
     await dbConnect();
-    const { items, customer, shippingAddress, couponCode, paymentMethod } = await req.json();
+    const { items, customer: rawCustomer, shippingAddress: rawAddress, couponCode, paymentMethod } =
+      await req.json();
     const method = paymentMethod === 'cod' ? 'cod' : 'razorpay';
 
-    if (!items?.length) return NextResponse.json({ error: 'Cart is empty' }, { status: 400 });
-    if (!customer?.name || !customer?.phone) {
-      return NextResponse.json({ error: 'Name and phone are required' }, { status: 400 });
+    if (!Array.isArray(items) || !items.length) {
+      return NextResponse.json({ error: 'Cart is empty' }, { status: 400 });
     }
-    if (!shippingAddress?.line1 || !shippingAddress?.city || !shippingAddress?.pincode) {
-      return NextResponse.json({ error: 'Shipping address is incomplete' }, { status: 400 });
+
+    // Validate the address BEFORE reserving any stock.
+    const checked = await validateAndCleanAddress(rawCustomer, rawAddress);
+    if (checked.error) {
+      return NextResponse.json({ error: checked.error }, { status: 400 });
     }
-    if (!shippingAddress?.state) {
-      return NextResponse.json({ error: 'Please select your state' }, { status: 400 });
-    }
+    const customer = checked.customer;
+    const shippingAddress = checked.address;
 
     // Razorpay is needed for a plain online order AND for a COD order that
     // carries a fee to be paid online — only a zero-fee COD order skips it.
@@ -96,10 +193,14 @@ export async function POST(req) {
       appliedCoupon = couponResult.appliedCoupon;
 
       const shippingFee = computeShipping(rule, subtotal - discount);
-      const total = Math.round(subtotal - discount + shippingFee + codFee);
-      // For COD, this is what's actually charged online right now — just the
-      // fee. For a plain online order it's the same as `total`.
-      const amountDueOnline = method === 'cod' ? codFee : total;
+
+      // Order total = items − discount + shipping. The COD charge is stored
+      // separately in `codFee` and is NOT part of the total.
+      //   • Online order: the whole `total` is charged on Razorpay.
+      //   • COD order:    only `codFee` is charged on Razorpay now; the full
+      //                   `total` is collected in cash on delivery.
+      const total = Math.round(subtotal - discount + shippingFee);
+      const amountDueOnline = method === 'cod' ? Math.round(codFee) : total;
 
       if (total <= 0) {
         await release();
@@ -120,7 +221,7 @@ export async function POST(req) {
         paymentMethod: method,
         // A zero-fee COD order is 'pending' (cash collected on delivery).
         // A COD order WITH a fee is 'cod_fee_pending' until that fee clears
-        // Razorpay — verify() below is what should move it out of this state.
+        // Razorpay — verify() / the webhook move it to 'cod_fee_paid'.
         paymentStatus: method === 'cod' ? (codFee > 0 ? 'cod_fee_pending' : 'pending') : 'pending',
         status: 'placed',
         stockReservations: decremented,
@@ -136,7 +237,9 @@ export async function POST(req) {
           cod: true,
           dbOrderId: dbOrder._id,
           orderNumber: dbOrder.orderNumber,
-          total
+          total,
+          codFee: 0,
+          cashDue: total
         });
       }
 
@@ -162,7 +265,9 @@ export async function POST(req) {
         keyId: process.env.RAZORPAY_KEY_ID,
         dbOrderId: dbOrder._id,
         cod: method === 'cod', // tells the client this Razorpay charge is the COD fee, not the full total
-        total
+        total,
+        codFee,
+        cashDue: method === 'cod' ? total : 0
       });
     } catch (err) {
       // Anything unexpected after stock was reserved: give it back, then let

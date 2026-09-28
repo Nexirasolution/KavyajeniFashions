@@ -9,6 +9,65 @@ import { formatINR } from '@/lib/utils';
 import { INDIAN_STATES } from '@/lib/shippingConfig';
 import { AlertTriangle } from 'lucide-react';
 
+// ─────────────────────────── Address validation helpers ───────────────────────────
+
+const NAME_RE = /^[A-Za-z][A-Za-z\s.'-]{1,}$/;
+const PIN_RE = /^[1-9]\d{5}$/;
+
+// Lowercase letters only, so "Jammu & Kashmir" matches "Jammu and Kashmir".
+const norm = (s = '') => String(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z]/g, '');
+
+// Strips +91 / 91 / 0 prefixes and any non-digits.
+function cleanPhone(p = '') {
+  let d = String(p).replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return d;
+}
+
+// Returns an object of { fieldName: 'error message' }. Empty object = valid.
+// Key order matches the on-screen field order so the first key is the first
+// field to focus.
+function validateAddress(f, pinInfo) {
+  const e = {};
+  if (!NAME_RE.test(f.name.trim())) e.name = 'Enter your full name';
+  if (!/^[6-9]\d{9}$/.test(cleanPhone(f.phone))) e.phone = 'Enter a valid 10-digit mobile number';
+  if (f.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.email.trim())) {
+    e.email = 'Enter a valid email';
+  }
+  if (f.line1.trim().length < 5) e.line1 = 'Enter your house / street address';
+  if (!NAME_RE.test(f.city.trim())) e.city = 'Enter a valid city';
+  if (!INDIAN_STATES.includes(f.state)) e.state = 'Select your state';
+
+  if (!PIN_RE.test(f.pincode)) {
+    e.pincode = 'Enter a valid 6-digit pincode';
+  } else if (pinInfo.pin === f.pincode) {
+    if (pinInfo.status === 'invalid') {
+      e.pincode = 'This pincode does not exist';
+    } else if (pinInfo.status === 'valid' && f.state && norm(pinInfo.state) !== norm(f.state)) {
+      e.pincode = `This pincode belongs to ${pinInfo.state}, not ${f.state}`;
+    }
+  }
+  return e;
+}
+
+function Field({ error, className = '', ...props }) {
+  return (
+    <div className={className}>
+      <input
+        {...props}
+        aria-invalid={!!error}
+        className={`w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ${
+          error ? 'border-red-400 focus:ring-red-300' : 'focus:ring-brand-magenta/40'
+        }`}
+      />
+      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────── Page ───────────────────────────────────
+
 export default function CheckoutPage() {
   const { items, subtotal, clearCart, checkStockOnly, updateQty, removeItem } = useCart();
   const router = useRouter();
@@ -37,6 +96,20 @@ export default function CheckoutPage() {
   const [showDiscountPopup, setShowDiscountPopup] = useState(false);
   const lastPoppedDiscountKey = useRef(null);
 
+  // ── Address validation state ──
+  const [showErrors, setShowErrors] = useState(false); // true after first Place Order click
+  const [touched, setTouched] = useState({});
+  // status: idle | checking | valid | invalid | unknown (lookup service unreachable)
+  const [pinInfo, setPinInfo] = useState({ pin: '', status: 'idle', state: '' });
+
+  const errors = validateAddress(form, pinInfo);
+  // Only show an error once the field was touched or the user tried to submit.
+  const err = (f) => (showErrors || touched[f] ? errors[f] : null);
+  const blur = (f) => () => setTouched((t) => ({ ...t, [f]: true }));
+
+  const pinPending =
+    PIN_RE.test(form.pincode) && (pinInfo.pin !== form.pincode || pinInfo.status === 'checking');
+
   // Whichever discount is bigger wins — a manually applied coupon or the
   // automatic tiered discount. They don't stack.
   const bestDiscountAmount = Math.max(discount, autoDiscount?.discountAmount || 0);
@@ -51,10 +124,11 @@ export default function CheckoutPage() {
   const codAvailable = !!cod?.available;
   const codFee = paymentMethod === 'cod' && codAvailable ? cod.fee : 0;
 
-  const total = shipping !== null ? Math.round(discountedSubtotal + shipping + codFee) : null;
-  // Amount that will actually be collected in cash at the doorstep for a COD
-  // order — everything except the COD handling fee, which is now paid online.
-  const codCashDue = total !== null ? Math.round(total - codFee) : null;
+  // Order total = items − discount + shipping. The COD charge is NOT part of
+  // it: it's a separate handling fee paid online right now.
+  const total = shipping !== null ? Math.round(discountedSubtotal + shipping) : null;
+  // For a COD order this whole total is collected in cash at the doorstep.
+  const codCashDue = total;
 
   // Stable string so the quote effect doesn't re-run on every render.
   const itemsKey = JSON.stringify(
@@ -63,6 +137,40 @@ export default function CheckoutPage() {
       isCombo: i.isCombo || false, comboId: i.comboId
     }))
   );
+
+  // Verify the pincode with India Post and auto-fill the state if it's empty.
+  // If the lookup service is down we fail open (status 'unknown') so a
+  // third-party outage never blocks real customers.
+  useEffect(() => {
+    const pin = form.pincode;
+    if (!PIN_RE.test(pin)) {
+      setPinInfo({ pin, status: 'idle', state: '' });
+      return;
+    }
+    let cancelled = false;
+    setPinInfo({ pin, status: 'checking', state: '' });
+    (async () => {
+      try {
+        const res = await fetch(`https://api.postalpincode.in/pincode/${pin}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const po = data?.[0]?.PostOffice;
+        if (data?.[0]?.Status === 'Success' && po?.length) {
+          const st = po[0].State;
+          setPinInfo({ pin, status: 'valid', state: st });
+          const match = INDIAN_STATES.find((s) => norm(s) === norm(st));
+          if (match) setForm((f) => (f.state ? f : { ...f, state: match }));
+        } else if (data?.[0]?.Status === 'Error') {
+          setPinInfo({ pin, status: 'invalid', state: '' });
+        } else {
+          setPinInfo({ pin, status: 'unknown', state: '' });
+        }
+      } catch {
+        if (!cancelled) setPinInfo({ pin, status: 'unknown', state: '' });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [form.pincode]);
 
   // Recalculate shipping + COD whenever state, cart, or discount changes.
   useEffect(() => {
@@ -194,10 +302,22 @@ export default function CheckoutPage() {
   }
 
   async function placeOrder() {
-    if (!form.name || !form.phone || !form.line1 || !form.city || !form.state || !form.pincode) {
-      toast.error('Please fill all required fields');
+    // 1. Address must be complete and correct.
+    setShowErrors(true);
+    const firstBad = Object.keys(errors)[0];
+    if (firstBad) {
+      toast.error('Please fix the highlighted address fields');
+      document
+        .querySelector(`[data-field="${firstBad}"] input, [data-field="${firstBad}"] select`)
+        ?.focus();
       return;
     }
+    if (pinPending) {
+      toast.error('Verifying pincode, please wait');
+      return;
+    }
+
+    // 2. Cart / shipping checks.
     if (items.length === 0) {
       toast.error('Your cart is empty');
       return;
@@ -225,14 +345,27 @@ export default function CheckoutPage() {
       isCombo: i.isCombo || false, comboId: i.comboId
     }));
 
+    // Send trimmed, normalised values (10-digit phone, no +91 / 0 prefix).
+    const cleanedPhone = cleanPhone(form.phone);
+    const cleanedForm = {
+      ...form,
+      name: form.name.trim(),
+      phone: cleanedPhone,
+      email: form.email.trim(),
+      line1: form.line1.trim(),
+      line2: form.line2.trim(),
+      city: form.city.trim(),
+      landmark: form.landmark.trim()
+    };
+
     try {
       const orderRes = await fetch('/api/payment/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           items: orderItems,
-          customer: { name: form.name, phone: form.phone, email: form.email },
-          shippingAddress: form,
+          customer: { name: cleanedForm.name, phone: cleanedPhone, email: cleanedForm.email },
+          shippingAddress: cleanedForm,
           couponCode: coupon,
           paymentMethod
         })
@@ -275,7 +408,7 @@ export default function CheckoutPage() {
         description: isCodFeePayment
           ? `COD handling charge — ${formatINR(codCashDue)} balance due in cash on delivery`
           : undefined,
-        prefill: { name: form.name, contact: form.phone, email: form.email },
+        prefill: { name: cleanedForm.name, contact: cleanedPhone, email: cleanedForm.email },
         theme: { color: '#C2185B' },
         handler: async function (response) {
           const finalRes = await fetch('/api/payment/verify', {
@@ -388,81 +521,110 @@ export default function CheckoutPage() {
       <div className="flex flex-col gap-6 sm:grid sm:grid-cols-2 sm:gap-8">
 
         {/* ── Shipping Details ── */}
-        <div className="card-soft p-4 sm:p-5 space-y-3">
+        <div className="card-soft p-4 sm:p-5 space-y-3 self-start">
           <h2 className="font-semibold text-brand-ink mb-1 text-sm sm:text-base">Shipping Details</h2>
 
-          <input
-            className="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-            placeholder="Full Name *"
-            autoComplete="name"
-            value={form.name}
-            onChange={(e) => update('name', e.target.value)}
-          />
-          <input
-            className="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-            placeholder="Phone Number *"
-            type="tel"
-            inputMode="numeric"
-            autoComplete="tel"
-            value={form.phone}
-            onChange={(e) => update('phone', e.target.value)}
-          />
-          <input
-            className="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-            placeholder="Email (optional)"
-            type="email"
-            autoComplete="email"
-            value={form.email}
-            onChange={(e) => update('email', e.target.value)}
-          />
-          <input
-            className="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-            placeholder="Address Line 1 *"
-            autoComplete="address-line1"
-            value={form.line1}
-            onChange={(e) => update('line1', e.target.value)}
-          />
-          <input
-            className="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-            placeholder="Address Line 2"
+          <div data-field="name">
+            <Field
+              placeholder="Full Name *"
+              autoComplete="name"
+              value={form.name}
+              onChange={(e) => update('name', e.target.value)}
+              onBlur={blur('name')}
+              error={err('name')}
+            />
+          </div>
+          <div data-field="phone">
+            <Field
+              placeholder="Mobile Number *"
+              type="tel"
+              inputMode="numeric"
+              autoComplete="tel"
+              value={form.phone}
+              onChange={(e) => update('phone', e.target.value)}
+              onBlur={blur('phone')}
+              error={err('phone')}
+            />
+          </div>
+          <div data-field="email">
+            <Field
+              placeholder="Email (optional)"
+              type="email"
+              autoComplete="email"
+              value={form.email}
+              onChange={(e) => update('email', e.target.value)}
+              onBlur={blur('email')}
+              error={err('email')}
+            />
+          </div>
+          <div data-field="line1">
+            <Field
+              placeholder="Address Line 1 (house no., street) *"
+              autoComplete="address-line1"
+              value={form.line1}
+              onChange={(e) => update('line1', e.target.value)}
+              onBlur={blur('line1')}
+              error={err('line1')}
+            />
+          </div>
+          <Field
+            placeholder="Address Line 2 (optional)"
             autoComplete="address-line2"
             value={form.line2}
             onChange={(e) => update('line2', e.target.value)}
           />
+
           <div className="grid grid-cols-2 gap-3">
-            <input
-              className="border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-              placeholder="City *"
-              autoComplete="address-level2"
-              value={form.city}
-              onChange={(e) => update('city', e.target.value)}
-            />
+            <div data-field="city">
+              <Field
+                placeholder="City *"
+                autoComplete="address-level2"
+                value={form.city}
+                onChange={(e) => update('city', e.target.value)}
+                onBlur={blur('city')}
+                error={err('city')}
+              />
+            </div>
             {/* Dropdown (not free text) so the state always matches an admin rule exactly */}
-            <select
-              className="border rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-              autoComplete="address-level1"
-              value={form.state}
-              onChange={(e) => update('state', e.target.value)}
-            >
-              <option value="">State *</option>
-              {INDIAN_STATES.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
+            <div data-field="state">
+              <select
+                className={`w-full border rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 ${
+                  err('state') ? 'border-red-400 focus:ring-red-300' : 'focus:ring-brand-magenta/40'
+                }`}
+                autoComplete="address-level1"
+                aria-invalid={!!err('state')}
+                value={form.state}
+                onChange={(e) => update('state', e.target.value)}
+                onBlur={blur('state')}
+              >
+                <option value="">State *</option>
+                {INDIAN_STATES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              {err('state') && <p className="text-xs text-red-600 mt-1">{errors.state}</p>}
+            </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
-            <input
-              className="border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-              placeholder="Pincode *"
-              inputMode="numeric"
-              maxLength={6}
-              autoComplete="postal-code"
-              value={form.pincode}
-              onChange={(e) => update('pincode', e.target.value)}
-            />
-            <input
-              className="border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40"
-              placeholder="Landmark"
+            <div data-field="pincode">
+              <Field
+                placeholder="Pincode *"
+                inputMode="numeric"
+                maxLength={6}
+                autoComplete="postal-code"
+                value={form.pincode}
+                onChange={(e) => update('pincode', e.target.value.replace(/\D/g, ''))}
+                onBlur={blur('pincode')}
+                error={err('pincode')}
+              />
+              {pinPending && <p className="text-xs text-brand-ink/50 mt-1">Verifying…</p>}
+              {pinInfo.status === 'valid' && pinInfo.pin === form.pincode && !errors.pincode && (
+                <p className="text-xs text-brand-green mt-1">✓ {pinInfo.state}</p>
+              )}
+            </div>
+            <Field
+              placeholder="Landmark (optional)"
               value={form.landmark}
               onChange={(e) => update('landmark', e.target.value)}
             />
@@ -576,12 +738,6 @@ export default function CheckoutPage() {
                   }
                 </span>
               </div>
-              {codFee > 0 && (
-                <div className="flex justify-between">
-                  <span className="text-brand-ink/70">COD charge (paid online now)</span>
-                  <span>{formatINR(codFee)}</span>
-                </div>
-              )}
             </div>
 
             <div className="flex justify-between font-bold text-base sm:text-lg mt-3 pt-3 border-t">
@@ -592,9 +748,16 @@ export default function CheckoutPage() {
             </div>
 
             {paymentMethod === 'cod' && codFee > 0 && codCashDue !== null && (
-              <p className="text-xs text-brand-ink/60 mt-1">
-                Pay {formatINR(codFee)} online now, and {formatINR(codCashDue)} in cash on delivery.
-              </p>
+              <div className="mt-3 rounded-lg border border-brand-magenta/15 bg-brand-magenta/5 px-3 py-2.5 text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-brand-ink/70">Pay now online (COD charge)</span>
+                  <span className="font-medium">{formatINR(codFee)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-brand-ink/70">Pay in cash on delivery</span>
+                  <span className="font-medium">{formatINR(codCashDue)}</span>
+                </div>
+              </div>
             )}
           </div>
 
