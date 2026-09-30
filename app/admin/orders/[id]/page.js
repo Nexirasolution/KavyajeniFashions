@@ -1,10 +1,13 @@
 'use client';
 
+// Location: app/admin/orders/[id]/page.js
+
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { formatINR } from '@/lib/utils';
+import { ZoomableImage } from '@/components/ImageLightbox';
 
 const STATUSES = ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled', 'returned'];
 
@@ -42,10 +45,10 @@ export default function AdminOrderDetailPage() {
         <h2 className="font-semibold mb-2">Items</h2>
         {order.items.map((item, i) => (
           <div key={i} className="flex items-center gap-3 text-sm py-2 border-b last:border-b-0 border-brand-ink/5">
-            <img
+            <ZoomableImage
               src={item.image || '/placeholder-product.png'}
               alt={item.name}
-              className="w-12 h-12 rounded-lg object-cover border border-brand-ink/10 flex-shrink-0"
+              className="w-12 h-12 rounded-lg object-cover border border-brand-ink/10"
               onError={(e) => { e.currentTarget.src = '/placeholder-product.png'; }}
             />
             <div className="flex-1 flex justify-between">

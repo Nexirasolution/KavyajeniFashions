@@ -23,6 +23,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { ZoomableImage } from '@/components/ImageLightbox';
 
 const PAGE_SIZE = 100; // products per page
 const LOW_STOCK = 5; // a size with this many units or fewer counts as "low"
@@ -683,7 +684,8 @@ export default function AdminInventoryPage() {
   /* ------------------------------ render ------------------------------ */
 
   return (
-    <div className={barsVisible === 2 ? 'pb-44' : barsVisible === 1 ? 'pb-28' : ''}>
+    // Extra bottom padding so the fixed action bars never cover the last products
+    <div className={barsVisible === 2 ? 'pb-64' : barsVisible === 1 ? 'pb-36' : ''}>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-brand-magenta">Inventory</h1>
@@ -773,7 +775,7 @@ export default function AdminInventoryPage() {
                   id="category-select"
                   value={activeCat}
                   onChange={(e) => setCat(e.target.value)}
-                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
+                  className="w-full rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-base focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20 sm:text-sm"
                 >
                   <option value="all">All categories ({navTotal})</option>
                   {navItems.map((c) => (
@@ -797,7 +799,7 @@ export default function AdminInventoryPage() {
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search by product, category, color or SKU"
                     aria-label="Search inventory"
-                    className="w-full rounded-lg border border-brand-ink/10 bg-white py-2 pl-9 pr-9 text-sm placeholder:text-brand-ink/40 focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
+                    className="w-full rounded-lg border border-brand-ink/10 bg-white py-2 pl-9 pr-9 text-base placeholder:text-brand-ink/40 focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20 sm:text-sm"
                   />
                   {query && (
                     <button
@@ -815,7 +817,7 @@ export default function AdminInventoryPage() {
                     value={sort}
                     onChange={(e) => setSort(e.target.value)}
                     aria-label="Sort products"
-                    className="rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
+                    className="min-w-0 flex-1 rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-base focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20 sm:flex-none sm:text-sm"
                   >
                     <option value="name">Name A–Z</option>
                     <option value="stock">Lowest stock first</option>
@@ -824,7 +826,7 @@ export default function AdminInventoryPage() {
                     type="button"
                     onClick={toggleAll}
                     disabled={pageIds.length === 0}
-                    className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta"
+                    className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-brand-ink/10 bg-white px-3 py-2 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta"
                   >
                     <ChevronDown size={15} className={`transition-transform ${allOpen ? 'rotate-180' : ''}`} />
                     {allOpen ? 'Collapse all' : 'Expand all'}
@@ -834,7 +836,7 @@ export default function AdminInventoryPage() {
 
               {filter === 'out' && list.length > 0 && (
                 <p className="mt-4 flex items-center gap-2 text-sm text-brand-ink/60">
-                  <EyeOff size={15} />
+                  <EyeOff size={15} className="shrink-0" />
                   These products are hidden from the shop. Add stock to any size and save to show them again.
                 </p>
               )}
@@ -879,14 +881,14 @@ export default function AdminInventoryPage() {
                 const allSel = selCount === stat.ids.length;
                 return (
                   <section key={g.cat.id} className="mt-6" aria-label={g.cat.label}>
-                    <div className="mb-3 flex items-center gap-3">
+                    <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
                       <Checkbox
                         checked={allSel}
                         indeterminate={selCount > 0}
                         onChange={() => setMany(stat.ids, !allSel)}
                         label={`Select all ${stat.ids.length} products in ${g.cat.label}`}
                       />
-                      <h2 className="text-base font-semibold">{g.cat.label}</h2>
+                      <h2 className="min-w-0 text-base font-semibold">{g.cat.label}</h2>
                       <span className="text-sm text-brand-ink/50">
                         {stat.ids.length} {plural(stat.ids.length, 'product')}
                         {stat.out > 0 ? `, ${stat.out} out of stock` : ''}
@@ -935,30 +937,33 @@ export default function AdminInventoryPage() {
         </>
       )}
 
-      {/* Floating bars: selection actions + unsaved changes */}
+      {/* Floating bars: selection actions + unsaved changes.
+          Pinned to the bottom edge and padded by the device safe-area so they are
+          never hidden under a phone's browser toolbar or home indicator. */}
       {barsVisible > 0 && (
-        <div className="fixed inset-x-3 bottom-3 z-40 flex flex-col gap-2 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2">
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex flex-col gap-2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:px-0 sm:pb-3">
           {selectedIds.length > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-brand-ink px-4 py-3 text-white shadow-xl sm:min-w-[460px]">
-              <p className="text-sm">
+            <div className="pointer-events-auto rounded-2xl bg-brand-ink px-3 py-3 text-white shadow-xl sm:flex sm:min-w-[460px] sm:items-center sm:justify-between sm:gap-3 sm:px-4">
+              <p className="mb-2 text-sm sm:mb-0">
                 <span className="font-semibold">{selectedIds.length} selected</span>
                 <span className="text-white/70">
                   {' '}
                   in {selectedCatCount} {plural(selectedCatCount, 'category', 'categories')}
                 </span>
               </p>
-              <div className="flex flex-wrap items-center gap-2">
+              {/* 4 equal columns on phones so Share can never wrap out of view */}
+              <div className="grid grid-cols-4 gap-2 sm:flex sm:items-center">
                 <button
                   type="button"
                   onClick={() => setSelected(new Set())}
-                  className="rounded-lg px-3 py-2 text-sm font-medium text-white/80 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  className="flex items-center justify-center rounded-lg px-2 py-2.5 text-xs font-medium text-white/80 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
                 >
                   Clear
                 </button>
                 <button
                   type="button"
                   onClick={() => setModal('share')}
-                  className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  className="flex items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-2.5 text-xs font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
                 >
                   <Share2 size={14} />
                   Share
@@ -966,15 +971,16 @@ export default function AdminInventoryPage() {
                 <button
                   type="button"
                   onClick={() => setModal('stock')}
-                  className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  className="flex items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-2.5 text-xs font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
                 >
                   <Pencil size={14} />
-                  Edit stock
+                  <span className="sm:hidden">Edit</span>
+                  <span className="hidden sm:inline">Edit stock</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setModal('delete')}
-                  className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  className="flex items-center justify-center gap-1.5 rounded-lg bg-red-600 px-2 py-2.5 text-xs font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
                 >
                   <Trash2 size={14} />
                   Delete
@@ -984,7 +990,7 @@ export default function AdminInventoryPage() {
           )}
 
           {dirty.count > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-ink/10 bg-white px-4 py-3 shadow-xl sm:min-w-[460px]">
+            <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-ink/10 bg-white px-4 py-3 shadow-xl sm:min-w-[460px]">
               <p className="text-sm">
                 <span className="font-semibold">
                   {dirty.count} unsaved {plural(dirty.count, 'change')}
@@ -1121,7 +1127,7 @@ function Pager({ page, totalPages, onChange }) {
   const btn =
     'grid h-9 min-w-9 place-items-center rounded-lg px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta';
   return (
-    <nav className="mt-8 flex items-center justify-center gap-1" aria-label="Pagination">
+    <nav className="mt-8 flex flex-wrap items-center justify-center gap-1" aria-label="Pagination">
       <button
         type="button"
         onClick={() => onChange(page - 1)}
@@ -1166,13 +1172,17 @@ function Pager({ page, totalPages, onChange }) {
 function StatusPill({ status }) {
   const s = STATUS[status];
   return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${s.cls}`}>
+    <span
+      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ${s.cls}`}
+    >
       {s.label}
     </span>
   );
 }
 
-function Thumb({ product }) {
+// `zoomable` makes the thumbnail clickable (opens the lightbox). It renders its own
+// <button>, so never place a zoomable Thumb inside another button.
+function Thumb({ product, zoomable = false }) {
   const [failed, setFailed] = useState(false);
   const src = getThumb(product);
 
@@ -1183,6 +1193,18 @@ function Thumb({ product }) {
       </div>
     );
   }
+
+  if (zoomable) {
+    return (
+      <ZoomableImage
+        src={src}
+        alt={product.name || ''}
+        onError={() => setFailed(true)}
+        className="h-12 w-12 rounded-lg bg-brand-cream object-cover"
+      />
+    );
+  }
+
   return (
     <img
       src={src}
@@ -1215,17 +1237,20 @@ function ProductCard({
   return (
     <div className={`card-soft overflow-hidden ${selected ? 'ring-2 ring-brand-magenta/50' : ''}`}>
       <div className="flex items-center">
-        <div className="pl-4">
+        <div className="pl-3 sm:pl-4">
           <Checkbox checked={selected} onChange={onSelect} label={`Select ${product.name}`} />
+        </div>
+        {/* Thumbnail sits beside (not inside) the toggle button: nested buttons are invalid HTML */}
+        <div className="pl-2 sm:pl-3">
+          <Thumb product={product} zoomable />
         </div>
         <button
           type="button"
           onClick={onToggle}
           aria-expanded={open}
           aria-controls={panelId}
-          className="flex min-w-0 flex-1 items-center gap-3 p-4 text-left transition-colors hover:bg-brand-cream/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-magenta"
+          className="flex min-w-0 flex-1 items-center gap-2 p-3 text-left transition-colors hover:bg-brand-cream/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-magenta sm:gap-3 sm:p-4"
         >
-          <Thumb product={product} />
           <div className="min-w-0 flex-1">
             <p className="truncate font-medium">{product.name}</p>
             <p className="text-xs text-brand-ink/50">
@@ -1251,7 +1276,7 @@ function ProductCard({
       </div>
 
       {open && (
-        <div id={panelId} className="space-y-5 border-t border-brand-ink/10 px-4 pb-4 pt-4">
+        <div id={panelId} className="space-y-5 border-t border-brand-ink/10 px-3 pb-4 pt-4 sm:px-4">
           {variants.map((v) => (
             <div key={v._id}>
               <h3 className="mb-2 text-sm font-semibold">
@@ -1345,7 +1370,7 @@ function SizeCell({ size, sku, saved, value, label, disabled, onChange, onEnter 
           onClick={() => step(-1)}
           disabled={disabled || !valid || n === 0}
           aria-label={`Decrease ${label}`}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-brand-ink/10 bg-white text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-30 disabled:hover:border-brand-ink/10 disabled:hover:text-brand-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-brand-ink/10 bg-white text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-30 disabled:hover:border-brand-ink/10 disabled:hover:text-brand-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta sm:h-8 sm:w-8"
         >
           <Minus size={14} />
         </button>
@@ -1362,14 +1387,14 @@ function SizeCell({ size, sku, saved, value, label, disabled, onChange, onEnter 
             if (e.key === 'Enter') onEnter();
           }}
           onFocus={(e) => e.target.select()}
-          className="h-8 w-full min-w-0 rounded-lg border border-brand-ink/10 bg-white text-center text-sm font-semibold tabular-nums focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
+          className="h-9 w-full min-w-0 rounded-lg border border-brand-ink/10 bg-white text-center text-base font-semibold tabular-nums focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20 sm:h-8 sm:text-sm"
         />
         <button
           type="button"
           onClick={() => step(1)}
           disabled={disabled}
           aria-label={`Increase ${label}`}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-brand-ink/10 bg-white text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-brand-ink/10 bg-white text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta sm:h-8 sm:w-8"
         >
           <Plus size={14} />
         </button>
@@ -1382,9 +1407,16 @@ function SizeCell({ size, sku, saved, value, label, disabled, onChange, onEnter 
 
 /* -------------------------------- modals -------------------------------- */
 
-// The footer buttons are laid out full-width and stacked on narrow screens
-// (so a long label like "Download images" never gets clipped or forces
-// horizontal scrolling), and as a normal right-aligned row from `sm` up.
+// Mobile-first modal:
+//  - On phones it is a bottom sheet. Header and footer stay pinned and only the
+//    middle scrolls, so the primary button (e.g. "Share via WhatsApp") is always
+//    visible.
+//  - Height uses `dvh` (the actually visible height on phones). Plain `vh`
+//    includes the area behind the browser toolbar, which pushed the footer
+//    buttons off-screen.
+//  - The footer is `flex-col-reverse` on phones, so the LAST button passed in
+//    (the primary action) appears on top, full-width. From `sm` up it is a
+//    normal right-aligned row.
 function Modal({ title, onClose, busy, children, footer }) {
   useEffect(() => {
     const onKey = (e) => {
@@ -1394,11 +1426,28 @@ function Modal({ title, onClose, busy, children, footer }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, busy]);
 
+  // Stop the page behind the modal from scrolling on phones
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center p-3 sm:p-4" role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
-      <div className="relative max-h-[92vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl sm:p-5">
-        <div className="mb-4 flex items-start justify-between gap-3">
+      <div
+        className="relative flex max-h-[92vh] w-full max-w-md flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
+        style={{ maxHeight: '92dvh' }}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-3 px-4 pb-3 pt-4 sm:px-5 sm:pt-5">
           <h2 className="font-display text-lg font-bold text-brand-magenta sm:text-xl">{title}</h2>
           <button
             type="button"
@@ -1410,8 +1459,10 @@ function Modal({ title, onClose, busy, children, footer }) {
             <X size={18} />
           </button>
         </div>
-        {children}
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-5">{children}</div>
+
+        <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-brand-ink/10 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:px-5 sm:pb-5">
           {footer}
         </div>
       </div>
@@ -1420,7 +1471,7 @@ function Modal({ title, onClose, busy, children, footer }) {
 }
 
 // Shared classes for footer buttons: full-width + centered on mobile,
-// natural width + left-aligned content from `sm` up.
+// natural width from `sm` up.
 const FOOTER_BTN = 'w-full justify-center sm:w-auto';
 
 const BULK_MODES = [
@@ -1450,7 +1501,7 @@ function BulkStockModal({ products, unsavedCount, busy, onClose, onApply }) {
             type="button"
             onClick={onClose}
             disabled={busy}
-            className={`rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 ${FOOTER_BTN}`}
+            className={`rounded-lg px-3 py-2.5 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
           >
             Cancel
           </button>
@@ -1458,7 +1509,7 @@ function BulkStockModal({ products, unsavedCount, busy, onClose, onApply }) {
             type="button"
             onClick={() => onApply(mode, numeric)}
             disabled={busy || !valid}
-            className={`inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOOTER_BTN}`}
+            className={`inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
           >
             {busy && <Loader2 size={15} className="animate-spin" />}
             Apply to {products.length} {plural(products.length, 'product')}
@@ -1495,7 +1546,7 @@ function BulkStockModal({ products, unsavedCount, busy, onClose, onApply }) {
                 value={value}
                 onChange={(e) => setValue(e.target.value.replace(/\D/g, ''))}
                 aria-label="Quantity"
-                className="h-8 w-20 rounded-lg border border-brand-ink/10 bg-white text-center text-sm font-semibold tabular-nums focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
+                className="h-9 w-20 rounded-lg border border-brand-ink/10 bg-white text-center text-base font-semibold tabular-nums focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20 sm:h-8 sm:text-sm"
               />
             )}
           </label>
@@ -1554,7 +1605,7 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
             type="button"
             onClick={onClose}
             disabled={busy}
-            className={`rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 ${FOOTER_BTN}`}
+            className={`rounded-lg px-3 py-2.5 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
           >
             Cancel
           </button>
@@ -1562,7 +1613,7 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
             type="button"
             onClick={onConfirm}
             disabled={busy || !canDelete}
-            className={`inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50 ${FOOTER_BTN}`}
+            className={`inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
           >
             {busy ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
             Delete {products.length} {plural(products.length, 'product')}
@@ -1580,7 +1631,7 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
           {catRows.slice(0, 4).map(([label, n]) => (
             <li key={label} className="flex items-center justify-between gap-3">
               <span className="truncate">{label}</span>
-              <span className="tabular-nums text-brand-ink/60">
+              <span className="shrink-0 tabular-nums text-brand-ink/60">
                 {n} {plural(n, 'product')}
               </span>
             </li>
@@ -1611,7 +1662,7 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
             autoFocus
             value={text}
             onChange={(e) => setText(e.target.value)}
-            className="w-full rounded-lg border border-brand-ink/10 px-3 py-2 text-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
+            className="w-full rounded-lg border border-brand-ink/10 px-3 py-2 text-base focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 sm:text-sm"
           />
         </div>
       )}
@@ -1720,7 +1771,7 @@ function ShareModal({ products, onClose }) {
             type="button"
             onClick={onClose}
             disabled={busy}
-            className={`rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 ${FOOTER_BTN}`}
+            className={`rounded-lg px-3 py-2.5 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
           >
             Close
           </button>
@@ -1729,7 +1780,7 @@ function ShareModal({ products, onClose }) {
               type="button"
               onClick={handleDownloadClick}
               disabled={busy}
-              className={`inline-flex items-center gap-2 rounded-lg border border-brand-ink/10 px-3 py-2 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-50 ${FOOTER_BTN}`}
+              className={`inline-flex items-center gap-2 rounded-lg border border-brand-ink/10 px-3 py-2.5 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
             >
               {downloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
               Download images
@@ -1739,7 +1790,7 @@ function ShareModal({ products, onClose }) {
             type="button"
             onClick={handleShareClick}
             disabled={shareDisabled}
-            className={`inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOOTER_BTN}`}
+            className={`inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
           >
             {loadingImages ? <Loader2 size={15} className="animate-spin" /> : <Share2 size={15} />}
             {loadingImages ? 'Preparing images…' : 'Share via WhatsApp'}
@@ -1788,12 +1839,13 @@ function ShareModal({ products, onClose }) {
       <label htmlFor="share-message" className="mb-1 block text-sm font-medium">
         Message
       </label>
+      {/* text-base on phones stops iOS Safari from zooming in when the field is tapped */}
       <textarea
         id="share-message"
-        rows={6}
+        rows={5}
         value={message}
         onChange={(e) => setMessage(e.target.value)}
-        className="w-full resize-y rounded-lg border border-brand-ink/10 px-3 py-2 text-sm focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20"
+        className="max-h-48 w-full resize-y rounded-lg border border-brand-ink/10 px-3 py-2 text-base focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20 sm:text-sm"
       />
       <p className="mt-1 text-xs text-brand-ink/50">
         Edit freely. This is exactly what gets shared. Price is never included.

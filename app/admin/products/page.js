@@ -1,12 +1,52 @@
 'use client';
 
+// Location: app/admin/products/page.js
+
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { Plus, Pencil, Trash2, UploadCloud } from 'lucide-react';
 import { formatINR } from '@/lib/utils';
+import { ZoomableImage } from '@/components/ImageLightbox';
 
 const PAGE_SIZE = 100;
+
+// Tries the common image field names. If your product model uses a different
+// field, add it to this list.
+function getThumb(p) {
+  const candidates = [
+    p.images?.[0],
+    p.image,
+    p.thumbnail,
+    ...(p.variants || []).map((v) => v.images?.[0] ?? v.image),
+  ];
+  for (const c of candidates) {
+    const url = typeof c === 'string' ? c : c?.url;
+    if (url) return url;
+  }
+  return null;
+}
+
+function ProductThumb({ product }) {
+  const [failed, setFailed] = useState(false);
+  const src = getThumb(product);
+
+  if (!src || failed) {
+    return (
+      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-brand-cream font-display font-bold text-brand-magenta">
+        {(product.name || '?').charAt(0).toUpperCase()}
+      </div>
+    );
+  }
+  return (
+    <ZoomableImage
+      src={src}
+      alt={product.name || ''}
+      onError={() => setFailed(true)}
+      className="h-10 w-10 rounded-lg bg-brand-cream object-cover"
+    />
+  );
+}
 
 export default function AdminProductsPage() {
   const [products, setProducts] = useState([]);
@@ -163,7 +203,12 @@ export default function AdminProductsPage() {
                       aria-label={`Select ${p.name}`}
                     />
                   </td>
-                  <td className="p-3 font-medium">{p.name}</td>
+                  <td className="p-3 font-medium">
+                    <div className="flex items-center gap-3">
+                      <ProductThumb product={p} />
+                      <span>{p.name}</span>
+                    </div>
+                  </td>
                   <td className="p-3 text-brand-ink/60">{p.category?.name}</td>
                   <td className="p-3">{formatINR(p.basePrice)}</td>
                   <td className="p-3">{p.variants?.length}</td>
