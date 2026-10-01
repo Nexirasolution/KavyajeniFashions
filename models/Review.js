@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const ReviewSchema = new mongoose.Schema(
   {
-    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product'},
     order: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null }, // set only for customer reviews tied to a real order
     customerName: { type: String, required: true },
     rating: { type: Number, required: true, min: 1, max: 5 },

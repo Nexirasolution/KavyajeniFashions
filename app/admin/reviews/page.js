@@ -1,5 +1,7 @@
 'use client';
 
+// Location: app/admin/reviews/page.js
+
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Check, X, Star, Trash2, Plus, Loader2, ImagePlus } from 'lucide-react';
@@ -71,8 +73,9 @@ export default function AdminReviewsPage() {
 
   async function submit(e) {
     e.preventDefault();
-    if (!form.product || !form.customerName.trim()) {
-      toast.error('Select a product and enter a customer name');
+    // Product is optional: only the customer name is required
+    if (!form.customerName.trim()) {
+      toast.error('Enter a customer name');
       return;
     }
     setSubmitting(true);
@@ -114,13 +117,13 @@ export default function AdminReviewsPage() {
           </div>
 
           <div className="sm:col-span-2">
-            <label className="block text-xs font-medium text-brand-ink/60 mb-1">Product</label>
+            <label className="block text-xs font-medium text-brand-ink/60 mb-1">Product (optional)</label>
             <select
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               value={form.product}
               onChange={(e) => setForm({ ...form, product: e.target.value })}
             >
-              <option value="">Select a product…</option>
+              <option value="">No product (general review)</option>
               {products.map((p) => (
                 <option key={p._id} value={p._id}>{p.name}</option>
               ))}
@@ -209,7 +212,9 @@ export default function AdminReviewsPage() {
                   ))}
                 </div>
               )}
-              <p className="text-xs text-brand-ink/50 mt-1">{r.customerName} · {r.product?.name}</p>
+              <p className="text-xs text-brand-ink/50 mt-1">
+                {r.customerName}{r.product?.name ? ` · ${r.product.name}` : ''}
+              </p>
               <div className="flex gap-2 mt-2 text-xs flex-wrap">
                 <span className={`px-2 py-0.5 rounded-full ${r.isApproved ? 'bg-brand-green/15 text-brand-deepgreen' : 'bg-brand-gold/15 text-brand-gold'}`}>
                   {r.isApproved ? 'Approved' : 'Pending'}
