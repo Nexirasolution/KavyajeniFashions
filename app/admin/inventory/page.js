@@ -3,6 +3,7 @@
 // Location: your admin inventory page (e.g. app/admin/inventory/page.js)
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import {
   AlertTriangle,
@@ -678,14 +679,14 @@ export default function AdminInventoryPage() {
     );
   }
 
-  const barsVisible = (selectedIds.length > 0 ? 1 : 0) + (dirty.count > 0 ? 1 : 0);
   const unsavedInSelection = selectedIds.filter((id) => dirty.byProduct[id]?.length).length;
 
   /* ------------------------------ render ------------------------------ */
 
   return (
-    // Extra bottom padding so the fixed action bars never cover the last products
-    <div className={barsVisible === 2 ? 'pb-64' : barsVisible === 1 ? 'pb-36' : ''}>
+    // Extra padding so the fixed bars never cover content:
+    // selection bar sits at the TOP (pt), unsaved-changes bar sits at the BOTTOM (pb)
+    <div className={`${dirty.count > 0 ? 'pb-36' : ''} ${selectedIds.length > 0 ? 'pt-24' : ''}`}>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-brand-magenta">Inventory</h1>
@@ -937,96 +938,97 @@ export default function AdminInventoryPage() {
         </>
       )}
 
-      {/* Floating bars: selection actions + unsaved changes.
-          Pinned to the bottom edge and padded by the device safe-area so they are
-          never hidden under a phone's browser toolbar or home indicator. */}
-      {barsVisible > 0 && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex flex-col gap-2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:px-0 sm:pb-3">
-          {selectedIds.length > 0 && (
-            <div className="pointer-events-auto rounded-2xl bg-brand-ink px-3 py-3 text-white shadow-xl sm:flex sm:min-w-[460px] sm:items-center sm:justify-between sm:gap-3 sm:px-4">
-              <p className="mb-2 text-sm sm:mb-0">
-                <span className="font-semibold">{selectedIds.length} selected</span>
-                <span className="text-white/70">
-                  {' '}
-                  in {selectedCatCount} {plural(selectedCatCount, 'category', 'categories')}
-                </span>
-              </p>
-              {/* 4 equal columns on phones so Share can never wrap out of view */}
-              <div className="grid grid-cols-4 gap-2 sm:flex sm:items-center">
-                <button
-                  type="button"
-                  onClick={() => setSelected(new Set())}
-                  className="flex items-center justify-center rounded-lg px-2 py-2.5 text-xs font-medium text-white/80 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
-                >
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModal('share')}
-                  className="flex items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-2.5 text-xs font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
-                >
-                  <Share2 size={14} />
-                  Share
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModal('stock')}
-                  className="flex items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-2.5 text-xs font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
-                >
-                  <Pencil size={14} />
-                  <span className="sm:hidden">Edit</span>
-                  <span className="hidden sm:inline">Edit stock</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModal('delete')}
-                  className="flex items-center justify-center gap-1.5 rounded-lg bg-red-600 px-2 py-2.5 text-xs font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
-                >
-                  <Trash2 size={14} />
-                  Delete
-                </button>
-              </div>
+      {/* Selection bar: pinned to the TOP (below the mobile admin header, top-14).
+          On desktop (lg) there is no mobile header, so it sits near the top edge. */}
+      {selectedIds.length > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 top-14 z-40 px-3 pt-2 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:px-0 lg:top-3">
+          <div className="pointer-events-auto rounded-2xl bg-brand-ink px-3 py-3 text-white shadow-xl sm:flex sm:min-w-[460px] sm:items-center sm:justify-between sm:gap-3 sm:px-4">
+            <p className="mb-2 text-sm sm:mb-0">
+              <span className="font-semibold">{selectedIds.length} selected</span>
+              <span className="text-white/70">
+                {' '}
+                in {selectedCatCount} {plural(selectedCatCount, 'category', 'categories')}
+              </span>
+            </p>
+            {/* 4 equal columns on phones so Share can never wrap out of view */}
+            <div className="grid grid-cols-4 gap-2 sm:flex sm:items-center">
+              <button
+                type="button"
+                onClick={() => setSelected(new Set())}
+                className="flex items-center justify-center rounded-lg px-2 py-2.5 text-xs font-medium text-white/80 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => setModal('share')}
+                className="flex items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-2.5 text-xs font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
+              >
+                <Share2 size={14} />
+                Share
+              </button>
+              <button
+                type="button"
+                onClick={() => setModal('stock')}
+                className="flex items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-2.5 text-xs font-semibold text-brand-ink hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
+              >
+                <Pencil size={14} />
+                <span className="sm:hidden">Edit</span>
+                <span className="hidden sm:inline">Edit stock</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModal('delete')}
+                className="flex items-center justify-center gap-1.5 rounded-lg bg-red-600 px-2 py-2.5 text-xs font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:px-3 sm:py-2 sm:text-sm"
+              >
+                <Trash2 size={14} />
+                Delete
+              </button>
             </div>
-          )}
+          </div>
+        </div>
+      )}
 
-          {dirty.count > 0 && (
-            <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-ink/10 bg-white px-4 py-3 shadow-xl sm:min-w-[460px]">
-              <p className="text-sm">
-                <span className="font-semibold">
-                  {dirty.count} unsaved {plural(dirty.count, 'change')}
+      {/* Unsaved changes bar: stays at the BOTTOM, padded by the device safe-area
+          so it is never hidden under a phone's browser toolbar or home indicator. */}
+      {dirty.count > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:px-0 sm:pb-3">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-ink/10 bg-white px-4 py-3 shadow-xl sm:min-w-[460px]">
+            <p className="text-sm">
+              <span className="font-semibold">
+                {dirty.count} unsaved {plural(dirty.count, 'change')}
+              </span>
+              <span className="text-brand-ink/60">
+                {' '}
+                in {Object.keys(dirty.byProduct).length}{' '}
+                {plural(Object.keys(dirty.byProduct).length, 'product')}
+              </span>
+              {dirty.invalid > 0 && (
+                <span className="block text-xs font-medium text-red-600">
+                  Enter a whole number, 0 or more, in every highlighted size.
                 </span>
-                <span className="text-brand-ink/60">
-                  {' '}
-                  in {Object.keys(dirty.byProduct).length}{' '}
-                  {plural(Object.keys(dirty.byProduct).length, 'product')}
-                </span>
-                {dirty.invalid > 0 && (
-                  <span className="block text-xs font-medium text-red-600">
-                    Enter a whole number, 0 or more, in every highlighted size.
-                  </span>
-                )}
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setEdits({})}
-                  disabled={anySaving}
-                  className="rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta"
-                >
-                  Discard
-                </button>
-                <button
-                  type="button"
-                  onClick={() => saveProducts(Object.keys(dirty.byProduct))}
-                  disabled={anySaving || dirty.invalid > 0}
-                  className="inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-brand-magenta"
-                >
-                  {anySaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-                  Save all changes
-                </button>
-              </div>
+              )}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setEdits({})}
+                disabled={anySaving}
+                className="rounded-lg px-3 py-2 text-sm font-medium text-brand-ink/70 hover:bg-brand-cream disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-magenta"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={() => saveProducts(Object.keys(dirty.byProduct))}
+                disabled={anySaving || dirty.invalid > 0}
+                className="inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-brand-magenta"
+              >
+                {anySaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                Save all changes
+              </button>
             </div>
-          )}
+          </div>
         </div>
       )}
 
@@ -1410,14 +1412,14 @@ function SizeCell({ size, sku, saved, value, label, disabled, onChange, onEnter 
 // Modal layout:
 //  - Default: on phones it is a bottom sheet, from `sm` up it is centered.
 //  - `centered`: centered on every screen size, with a small margin around it.
-//  - `top`: anchored to the TOP of the screen on phones (below the safe-area
-//    inset / notch), centered from `sm` up. Used by the Share modal so the
-//    message field stays visible above the on-screen keyboard.
+//  - `top`: pinned to the TOP of the screen on every screen size (below the
+//    safe-area inset / notch). Used by the Share modal so the message field
+//    stays visible above the on-screen keyboard.
+//  - Rendered in a portal on document.body so no parent element can change
+//    its position.
 //  - Header and footer stay pinned and only the middle scrolls, so the primary
 //    button is always visible.
-//  - Height uses `dvh` (the actually visible height on phones). Plain `vh`
-//    includes the area behind the browser toolbar, which pushed the footer
-//    buttons off-screen.
+//  - Height uses `dvh` (the actually visible height on phones).
 //  - The footer is `flex-col-reverse` on phones, so the LAST button passed in
 //    (the primary action) appears on top, full-width. From `sm` up it is a
 //    normal right-aligned row.
@@ -1441,14 +1443,56 @@ function Modal({ title, onClose, busy, children, footer, centered = false, top =
 
   const floating = top || centered; // fully rounded card (not a bottom sheet)
 
-  return (
+  const inner = (
+    <>
+      <div className="flex shrink-0 items-start justify-between gap-3 px-4 pb-3 pt-4 sm:px-5 sm:pt-5">
+        <h2 className="font-display text-lg font-bold text-brand-magenta sm:text-xl">{title}</h2>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          aria-label="Close"
+          className="shrink-0 rounded p-1 text-brand-ink/40 hover:text-brand-ink/70 disabled:opacity-40"
+        >
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-5">{children}</div>
+
+      <div
+        className={`flex shrink-0 flex-col-reverse gap-2 border-t border-brand-ink/10 px-4 pt-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:px-5 sm:pb-5 ${
+          floating ? 'pb-4' : 'pb-[max(1rem,env(safe-area-inset-bottom))]'
+        }`}
+      >
+        {footer}
+      </div>
+    </>
+  );
+
+  if (typeof document === 'undefined') return null;
+
+  // TOP modal: pinned to the top edge on every screen size
+  if (top) {
+    return createPortal(
+      <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
+        <div
+          className="absolute left-1/2 flex w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 flex-col rounded-2xl bg-white shadow-2xl"
+          style={{ top: 'max(0.75rem, env(safe-area-inset-top))', maxHeight: '80dvh' }}
+        >
+          {inner}
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  // Other modals: bottom sheet on phones, centered from sm up (or always centered)
+  return createPortal(
     <div
       className={`fixed inset-0 z-50 flex justify-center ${
-        top
-          ? 'items-start p-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:items-center sm:p-4'
-          : centered
-            ? 'items-center p-4'
-            : 'items-end sm:items-center sm:p-4'
+        centered ? 'items-center p-4' : 'items-end sm:items-center sm:p-4'
       }`}
       role="dialog"
       aria-modal="true"
@@ -1456,35 +1500,15 @@ function Modal({ title, onClose, busy, children, footer, centered = false, top =
     >
       <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
       <div
-        className={`relative flex max-h-[92vh] w-full max-w-md flex-col bg-white shadow-2xl ${
+        className={`relative flex w-full max-w-md flex-col bg-white shadow-2xl ${
           floating ? 'rounded-2xl' : 'rounded-t-2xl sm:rounded-2xl'
         }`}
         style={{ maxHeight: floating ? '88dvh' : '92dvh' }}
       >
-        <div className="flex shrink-0 items-start justify-between gap-3 px-4 pb-3 pt-4 sm:px-5 sm:pt-5">
-          <h2 className="font-display text-lg font-bold text-brand-magenta sm:text-xl">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            aria-label="Close"
-            className="shrink-0 rounded p-1 text-brand-ink/40 hover:text-brand-ink/70 disabled:opacity-40"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-5">{children}</div>
-
-        <div
-          className={`flex shrink-0 flex-col-reverse gap-2 border-t border-brand-ink/10 px-4 pt-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:px-5 sm:pb-5 ${
-            floating ? 'pb-4' : 'pb-[max(1rem,env(safe-area-inset-bottom))]'
-          }`}
-        >
-          {footer}
-        </div>
+        {inner}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

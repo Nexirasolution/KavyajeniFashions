@@ -6,6 +6,7 @@ import Product from '@/models/Product';
 import Review from '@/models/Review';
 import Combo from '@/models/Combo';
 import Category from '@/models/Category';
+import { inStockFilter } from '@/lib/stockFilter';
 import '@/models/Reel'; // (reels section is disabled, so we no longer query it)
 import BannerCarousel from '@/components/BannerCarousel';
 import ProductTabs from '@/components/ProductCarousel';
@@ -28,14 +29,32 @@ const COMBOS_HREF = '/combo';
 // Mongo response and the HTML/RSC payload sent to every visitor.
 const PRODUCT_FIELDS = '-description -__v';
 
+// Products per page in the "All Products" tab. This page-1 batch is cached with the
+// homepage; keep it at 100 so it matches /api/products (MAX_LIMIT = 100).
+const ALL_PRODUCTS_LIMIT = 100;
+
 const getData = unstable_cache(
   async () => {
     await dbConnect();
-    const [banners, bestSellers, topSellers, activeSellers, reviews, combos, categories] = await Promise.all([
+    const [
+      banners,
+      bestSellers,
+      topSellers,
+      activeSellers,
+      allProducts,
+      allTotal,
+      reviews,
+      combos,
+      categories,
+    ] = await Promise.all([
       Banner.find({ isActive: true }).sort({ sortOrder: 1 }).select('-__v').lean(),
-      Product.find({ isActive: true, isBestSeller: true }).select(PRODUCT_FIELDS).limit(12).lean(),
-      Product.find({ isActive: true, isTopSeller: true }).select(PRODUCT_FIELDS).limit(12).lean(),
-      Product.find({ isActive: true, isActiveSeller: true }).select(PRODUCT_FIELDS).sort({ createdAt: -1 }).limit(12).lean(),
+      Product.find({ isActive: true, isBestSeller: true, ...inStockFilter() }).select(PRODUCT_FIELDS).limit(12).lean(),
+      Product.find({ isActive: true, isTopSeller: true, ...inStockFilter() }).select(PRODUCT_FIELDS).limit(12).lean(),
+      Product.find({ isActive: true, isActiveSeller: true, ...inStockFilter() }).select(PRODUCT_FIELDS).sort({ createdAt: -1 }).limit(12).lean(),
+      // Page 1 of the "All Products" tab (later pages load from /api/products)
+      Product.find({ isActive: true, ...inStockFilter() }).select(PRODUCT_FIELDS).sort({ createdAt: -1 }).limit(ALL_PRODUCTS_LIMIT).lean(),
+      // Total in-stock products, so the tab knows how many pages there are
+      Product.countDocuments({ isActive: true, ...inStockFilter() }),
       Review.find({ isApproved: true, isFeatured: true }).populate('product', 'name').limit(10).lean(),
       Combo.find({ isActive: true }).limit(6).lean(),
       // Top-level categories only; subcategories show on the category page.
@@ -43,15 +62,26 @@ const getData = unstable_cache(
     ]);
 
     return JSON.parse(JSON.stringify({
-      banners, bestSellers, topSellers, activeSellers, reviews, combos, categories,
+      banners, bestSellers, topSellers, activeSellers, allProducts, allTotal, reviews, combos, categories,
     }));
   },
-  ['homepage-data'],
+  // Cache key bumped (v3) so the old cached data without `allProducts` is not reused
+  ['homepage-data-v3'],
   { revalidate: 300, tags: ['homepage', 'banners', 'product-list', 'combos', 'categories', 'reviews'] }
 );
 
 export default async function HomePage() {
-  const { banners, bestSellers, topSellers, activeSellers, reviews, combos, categories } = await getData();
+  const {
+    banners,
+    bestSellers,
+    topSellers,
+    activeSellers,
+    allProducts,
+    allTotal,
+    reviews,
+    combos,
+    categories,
+  } = await getData();
 
   return (
     <div className="overflow-x-hidden">
@@ -84,8 +114,10 @@ export default async function HomePage() {
         </section>
       )}
 
-      {/* Product tabs — Bestsellers / Top Sellers / New Arrivals */}
+      {/* Product tabs — All Products / Bestsellers / Top Sellers / New Arrivals */}
       <ProductTabs
+        allProducts={allProducts}
+        allTotal={allTotal}
         bestSellers={bestSellers}
         topSellers={topSellers}
         activeSellers={activeSellers}
