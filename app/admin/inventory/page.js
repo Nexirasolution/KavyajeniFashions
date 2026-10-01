@@ -1407,17 +1407,21 @@ function SizeCell({ size, sku, saved, value, label, disabled, onChange, onEnter 
 
 /* -------------------------------- modals -------------------------------- */
 
-// Mobile-first modal:
-//  - On phones it is a bottom sheet. Header and footer stay pinned and only the
-//    middle scrolls, so the primary button (e.g. "Share via WhatsApp") is always
-//    visible.
+// Modal layout:
+//  - Default: on phones it is a bottom sheet, from `sm` up it is centered.
+//  - `centered`: centered on every screen size, with a small margin around it.
+//  - `top`: anchored to the TOP of the screen on phones (below the safe-area
+//    inset / notch), centered from `sm` up. Used by the Share modal so the
+//    message field stays visible above the on-screen keyboard.
+//  - Header and footer stay pinned and only the middle scrolls, so the primary
+//    button is always visible.
 //  - Height uses `dvh` (the actually visible height on phones). Plain `vh`
 //    includes the area behind the browser toolbar, which pushed the footer
 //    buttons off-screen.
 //  - The footer is `flex-col-reverse` on phones, so the LAST button passed in
 //    (the primary action) appears on top, full-width. From `sm` up it is a
 //    normal right-aligned row.
-function Modal({ title, onClose, busy, children, footer }) {
+function Modal({ title, onClose, busy, children, footer, centered = false, top = false }) {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape' && !busy) onClose();
@@ -1435,17 +1439,27 @@ function Modal({ title, onClose, busy, children, footer }) {
     };
   }, []);
 
+  const floating = top || centered; // fully rounded card (not a bottom sheet)
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
+      className={`fixed inset-0 z-50 flex justify-center ${
+        top
+          ? 'items-start p-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:items-center sm:p-4'
+          : centered
+            ? 'items-center p-4'
+            : 'items-end sm:items-center sm:p-4'
+      }`}
       role="dialog"
       aria-modal="true"
       aria-label={title}
     >
       <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
       <div
-        className="relative flex max-h-[92vh] w-full max-w-md flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
-        style={{ maxHeight: '92dvh' }}
+        className={`relative flex max-h-[92vh] w-full max-w-md flex-col bg-white shadow-2xl ${
+          floating ? 'rounded-2xl' : 'rounded-t-2xl sm:rounded-2xl'
+        }`}
+        style={{ maxHeight: floating ? '88dvh' : '92dvh' }}
       >
         <div className="flex shrink-0 items-start justify-between gap-3 px-4 pb-3 pt-4 sm:px-5 sm:pt-5">
           <h2 className="font-display text-lg font-bold text-brand-magenta sm:text-xl">{title}</h2>
@@ -1462,7 +1476,11 @@ function Modal({ title, onClose, busy, children, footer }) {
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-5">{children}</div>
 
-        <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-brand-ink/10 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:px-5 sm:pb-5">
+        <div
+          className={`flex shrink-0 flex-col-reverse gap-2 border-t border-brand-ink/10 px-4 pt-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:px-5 sm:pb-5 ${
+            floating ? 'pb-4' : 'pb-[max(1rem,env(safe-area-inset-bottom))]'
+          }`}
+        >
           {footer}
         </div>
       </div>
@@ -1765,6 +1783,7 @@ function ShareModal({ products, onClose }) {
       title={`Share ${products.length} ${plural(products.length, 'product')}`}
       onClose={onClose}
       busy={busy}
+      top
       footer={
         <>
           <button
