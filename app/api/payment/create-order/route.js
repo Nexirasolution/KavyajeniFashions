@@ -1,3 +1,4 @@
+// Save as: src/app/api/payment/create-order/route.js
 import { NextResponse } from 'next/server';
 import { dbConnect } from '@/lib/mongodb';
 import { getRazorpay } from '@/lib/razorpay';
@@ -9,10 +10,11 @@ import {
   releaseCoupon,
   applyCouponToSubtotal
 } from '@/lib/orderCreation';
+import { releaseExpiredOrders } from '@/lib/releaseExpiredOrders';
 import { getShippingSettings, getCodStatus, orderItemsToLines } from '@/lib/shipping';
 import { resolveRule, computeShipping, INDIAN_STATES } from '@/lib/shippingConfig';
 
-const RESERVATION_WINDOW_MS = 15 * 60 * 1000; // 15 min to complete online payment
+const RESERVATION_WINDOW_MS = 10 * 60 * 1000; // 10 min to complete payment, then stock is released
 
 // ─────────────────────────── Address validation ───────────────────────────
 
@@ -135,6 +137,11 @@ export async function POST(req) {
     const settings = await getShippingSettings();
     const rule = resolveRule(settings, shippingAddress.state);
 
+    // Give back stock held by abandoned (expired, unpaid) checkouts right now,
+    // so this customer isn't told "out of stock" because of someone who left.
+    // Best-effort: a failure here must never block the order.
+    await releaseExpiredOrders().catch((e) => console.error('releaseExpiredOrders failed:', e));
+
     // Reserve stock atomically BEFORE the customer ever sees the payment
     // modal (or, for a zero-fee COD order, before the order is created).
     let reserved;
@@ -226,8 +233,9 @@ export async function POST(req) {
         status: 'placed',
         stockReservations: decremented,
         // Anything with money still outstanding online (a plain online order,
-        // or a COD order with a fee) must expire if payment is abandoned —
-        // only a zero-fee COD order is exempt from the cron sweep.
+        // or a COD order with a fee) expires after RESERVATION_WINDOW_MS if
+        // payment is abandoned — releaseExpiredOrders() then cancels it and
+        // restores the stock. Only a zero-fee COD order is exempt.
         expiresAt: needsOnlineCharge ? new Date(Date.now() + RESERVATION_WINDOW_MS) : undefined
       });
 

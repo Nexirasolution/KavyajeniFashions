@@ -1,5 +1,7 @@
 'use client';
 
+// Save as: src/app/checkout/page.jsx (same location as your current checkout page)
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Script from 'next/script';
@@ -8,6 +10,11 @@ import { useCart } from '@/components/CartContext';
 import { formatINR } from '@/lib/utils';
 import { INDIAN_STATES } from '@/lib/shippingConfig';
 import { AlertTriangle } from 'lucide-react';
+
+// Razorpay popup closes itself after this many seconds. Kept a little under
+// the server's 10-minute reservation window so a customer can't be mid-payment
+// when the unpaid order expires and its stock is given back.
+const PAYMENT_TIMEOUT_SECONDS = 540;
 
 // ─────────────────────────── Address validation helpers ───────────────────────────
 
@@ -410,6 +417,8 @@ export default function CheckoutPage() {
           : undefined,
         prefill: { name: cleanedForm.name, contact: cleanedPhone, email: cleanedForm.email },
         theme: { color: '#C2185B' },
+        // Auto-close the popup before the server expires the unpaid order.
+        timeout: PAYMENT_TIMEOUT_SECONDS,
         handler: async function (response) {
           const finalRes = await fetch('/api/payment/verify', {
             method: 'POST',
@@ -428,6 +437,8 @@ export default function CheckoutPage() {
           } else {
             // Payment likely succeeded on Razorpay's side even if this
             // call failed — the webhook will finalize the order shortly.
+            // (A 409 here means the payment window had already expired; the
+            // message from the server explains what to do.)
             toast.error(finalData.error || 'Payment received — confirming your order.');
             router.push('/track-order');
           }
@@ -435,6 +446,7 @@ export default function CheckoutPage() {
         },
         modal: {
           ondismiss: () => {
+            // Covers both the customer closing the popup and the timeout above.
             fetch('/api/payment/cancel', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { formatINR } from '@/lib/utils';
 
 const STATUSES = ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled', 'returned'];
+const LIMIT = 20;
 
 // Turns (paymentMethod, paymentStatus) into a short, readable label + color.
 // A COD order's paymentStatus tracks the online-paid HANDLING FEE only —
@@ -54,21 +55,54 @@ function PaymentBadge({ order }) {
 export default function AdminOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [status, setStatus] = useState('');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(''); // what's typed in the box
+  const [query, setQuery] = useState('');   // what's actually applied
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  async function load() {
-    setLoading(true);
-    const params = new URLSearchParams();
-    if (status) params.set('status', status);
-    if (search) params.set('search', search);
-    const res = await fetch(`/api/orders?${params.toString()}`);
-    const data = await res.json();
-    setOrders(data.orders || []);
-    setLoading(false);
+  useEffect(() => {
+    let cancelled = false; // ignore stale responses if filters change quickly
+
+    async function load() {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({
+          page: String(page),
+          limit: String(LIMIT),
+          paymentStatus: 'paid,cod_fee_paid', // online-paid orders + COD orders whose fee was paid online
+        });
+        if (status) params.set('status', status);
+        if (query) params.set('search', query);
+        const res = await fetch(`/api/orders?${params.toString()}`);
+        const data = await res.json();
+        if (cancelled) return;
+        setOrders(data.orders || []);
+        setTotal(data.total || 0);
+        setPages(data.pages || 1);
+      } catch (err) {
+        if (!cancelled) {
+          setOrders([]);
+          setTotal(0);
+          setPages(1);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, [status, query, page]);
+
+  function applySearch() {
+    setPage(1);
+    setQuery(search.trim());
   }
 
-  useEffect(() => { load(); }, [status]);
+  const from = total === 0 ? 0 : (page - 1) * LIMIT + 1;
+  const to = Math.min(page * LIMIT, total);
 
   return (
     <div>
@@ -79,14 +113,18 @@ export default function AdminOrdersPage() {
           placeholder="Search by order number, name, phone"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && load()}
+          onKeyDown={(e) => e.key === 'Enter' && applySearch()}
           className="border rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px]"
         />
-        <select value={status} onChange={(e) => setStatus(e.target.value)} className="border rounded-lg px-3 py-2 text-sm">
+        <select
+          value={status}
+          onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+          className="border rounded-lg px-3 py-2 text-sm"
+        >
           <option value="">All Status</option>
           {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <button onClick={load} className="btn-outline text-sm">Search</button>
+        <button onClick={applySearch} className="btn-outline text-sm">Search</button>
       </div>
 
       {loading ? (
@@ -109,17 +147,50 @@ export default function AdminOrdersPage() {
               {orders.map((o) => (
                 <tr key={o._id} className="border-b border-brand-ink/5">
                   <td className="p-3 font-medium">{o.orderNumber}</td>
-                  <td className="p-3">{o.customer?.name}<br /><span className="text-xs text-brand-ink/50">{o.customer?.phone}</span></td>
+                  <td className="p-3">
+                    {o.customer?.name}
+                    <br />
+                    <span className="text-xs text-brand-ink/50">{o.customer?.phone}</span>
+                  </td>
                   <td className="p-3">{formatINR(o.total)}</td>
                   <td className="p-3"><PaymentBadge order={o} /></td>
                   <td className="p-3 capitalize">{o.status}</td>
-                  <td className="p-3 text-xs text-brand-ink/50">{new Date(o.createdAt).toLocaleDateString('en-IN')}</td>
-                  <td className="p-3"><Link href={`/admin/orders/${o._id}`} className="text-brand-magenta font-medium">View</Link></td>
+                  <td className="p-3 text-xs text-brand-ink/50">
+                    {new Date(o.createdAt).toLocaleDateString('en-IN')}
+                  </td>
+                  <td className="p-3">
+                    <Link href={`/admin/orders/${o._id}`} className="text-brand-magenta font-medium">View</Link>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
           {orders.length === 0 && <p className="text-center text-brand-ink/40 py-10">No orders found.</p>}
+
+          {total > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3 border-t border-brand-ink/10 text-sm">
+              <span className="text-brand-ink/50">
+                Showing {from}–{to} of {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="btn-outline text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="text-brand-ink/70">Page {page} of {pages}</span>
+                <button
+                  onClick={() => setPage((p) => Math.min(pages, p + 1))}
+                  disabled={page >= pages}
+                  className="btn-outline text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

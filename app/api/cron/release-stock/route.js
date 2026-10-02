@@ -1,55 +1,29 @@
+// Save in place of your existing sweep route (the file you pasted).
 import { NextResponse } from 'next/server';
-import { dbConnect } from '@/lib/mongodb';
-import { getRazorpay } from '@/lib/razorpay';
-import Order from '@/models/Order';
-import { rollbackStock, releaseCoupon } from '@/lib/orderCreation';
+import { releaseExpiredOrders } from '@/lib/releaseExpiredOrders';
 
-// Safety net: catches orders where BOTH the client callback and the
-// webhook failed to fire (e.g. tab closed AND webhook delivery failed).
-// Schedule this to run every 5 minutes.
-export async function POST(req) {
-  const auth = req.headers.get('authorization');
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+export const dynamic = 'force-dynamic';
+
+// Safety net: catches orders where BOTH the client callback and the webhook
+// failed to fire (e.g. tab closed AND webhook delivery failed), and releases
+// the stock of unpaid orders once their 10-minute payment window has passed.
+// Schedule this to run EVERY MINUTE so stock comes back close to the 10-minute mark.
+async function handle(req) {
+  // Fail closed if CRON_SECRET isn't configured (otherwise "Bearer undefined" would pass).
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.headers.get('authorization') !== `Bearer ${secret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  await dbConnect();
-  const razorpay = getRazorpay();
-
-  const stale = await Order.find({
-    paymentMethod: 'razorpay',
-    paymentStatus: 'pending',
-    expiresAt: { $lte: new Date() }
-  });
-
-  let released = 0;
-  let confirmed = 0;
-
-  for (const order of stale) {
-    if (razorpay && order.razorpayOrderId) {
-      try {
-        const rzpOrder = await razorpay.orders.fetch(order.razorpayOrderId);
-        if (rzpOrder.status === 'paid') {
-          order.paymentStatus = 'paid';
-          order.expiresAt = undefined;
-          await order.save();
-          confirmed += 1;
-          continue;
-        }
-      } catch (e) {
-        console.error(`Could not check Razorpay status for order ${order._id}:`, e);
-        continue; // leave it for next sweep rather than guessing
-      }
-    }
-
-    await rollbackStock(order.stockReservations);
-    await releaseCoupon(order.couponCode);
-    order.paymentStatus = 'failed';
-    order.status = 'cancelled';
-    order.expiresAt = undefined;
-    await order.save();
-    released += 1;
+  try {
+    const result = await releaseExpiredOrders();
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error('Order sweep failed:', err);
+    return NextResponse.json({ error: 'Sweep failed' }, { status: 500 });
   }
-
-  return NextResponse.json({ swept: stale.length, released, confirmed });
 }
+
+// POST for your existing scheduler; GET because Vercel Cron sends GET requests.
+export const POST = handle;
+export const GET = handle;

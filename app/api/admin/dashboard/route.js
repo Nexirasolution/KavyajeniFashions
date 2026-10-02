@@ -5,6 +5,11 @@ import Product from '@/models/Product';
 import { requireAdmin } from '@/lib/apiAuth';
 import { daysAgo, startOfDay } from '@/lib/utils';
 
+// Only online-paid orders and COD orders whose handling fee was paid online
+// are counted anywhere on the dashboard.
+const PAID_STATUSES = ['paid', 'cod_fee_paid'];
+const paidMatch = { paymentStatus: { $in: PAID_STATUSES } };
+
 export const GET = requireAdmin(async () => {
   await dbConnect();
 
@@ -13,12 +18,12 @@ export const GET = requireAdmin(async () => {
   const last30 = daysAgo(30);
 
   const [todayOrders, weekOrders, monthOrders, totalOrders, totalProducts, pendingOrders, lowStock] = await Promise.all([
-    Order.find({ createdAt: { $gte: today } }),
-    Order.find({ createdAt: { $gte: last7 } }),
-    Order.find({ createdAt: { $gte: last30 } }),
-    Order.countDocuments(),
+    Order.find({ ...paidMatch, createdAt: { $gte: today } }),
+    Order.find({ ...paidMatch, createdAt: { $gte: last7 } }),
+    Order.find({ ...paidMatch, createdAt: { $gte: last30 } }),
+    Order.countDocuments(paidMatch),
     Product.countDocuments({ isActive: true }),
-    Order.countDocuments({ status: { $in: ['placed', 'confirmed'] } }),
+    Order.countDocuments({ ...paidMatch, status: { $in: ['placed', 'confirmed'] } }),
     Product.find({ 'variants.sizes.stock': { $lte: 5, $gt: 0 } }).select('name variants').limit(10)
   ]);
 
@@ -29,7 +34,7 @@ export const GET = requireAdmin(async () => {
   for (let i = 13; i >= 0; i--) {
     const day = daysAgo(i);
     const nextDay = daysAgo(i - 1);
-    const dayOrders = await Order.find({ createdAt: { $gte: day, $lt: nextDay } });
+    const dayOrders = await Order.find({ ...paidMatch, createdAt: { $gte: day, $lt: nextDay } });
     trend.push({
       date: day.toISOString().slice(5, 10),
       sales: sum(dayOrders),
