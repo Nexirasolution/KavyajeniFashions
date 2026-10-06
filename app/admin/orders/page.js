@@ -52,6 +52,14 @@ function PaymentBadge({ order }) {
   );
 }
 
+// "Product A, Product B +2 more" — shows admins why a product search matched.
+function itemsSummary(items = []) {
+  const names = items.map((i) => i.name).filter(Boolean);
+  if (names.length === 0) return '';
+  const shown = names.slice(0, 2).join(', ');
+  return names.length > 2 ? `${shown} +${names.length - 2} more` : shown;
+}
+
 export default function AdminOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [status, setStatus] = useState('');
@@ -101,6 +109,12 @@ export default function AdminOrdersPage() {
     setQuery(search.trim());
   }
 
+  function clearSearch() {
+    setSearch('');
+    setQuery('');
+    setPage(1);
+  }
+
   const from = total === 0 ? 0 : (page - 1) * LIMIT + 1;
   const to = Math.min(page * LIMIT, total);
 
@@ -110,7 +124,7 @@ export default function AdminOrdersPage() {
 
       <div className="flex flex-wrap gap-3 mb-4">
         <input
-          placeholder="Search by order number, name, phone"
+          placeholder="Search by order #, tracking ID, customer name, phone, or product"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && applySearch()}
@@ -125,6 +139,9 @@ export default function AdminOrdersPage() {
           {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <button onClick={applySearch} className="btn-outline text-sm">Search</button>
+        {(search || query) && (
+          <button onClick={clearSearch} className="btn-outline text-sm">Clear</button>
+        )}
       </div>
 
       {loading ? (
@@ -144,25 +161,39 @@ export default function AdminOrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => (
-                <tr key={o._id} className="border-b border-brand-ink/5">
-                  <td className="p-3 font-medium">{o.orderNumber}</td>
-                  <td className="p-3">
-                    {o.customer?.name}
-                    <br />
-                    <span className="text-xs text-brand-ink/50">{o.customer?.phone}</span>
-                  </td>
-                  <td className="p-3">{formatINR(o.total)}</td>
-                  <td className="p-3"><PaymentBadge order={o} /></td>
-                  <td className="p-3 capitalize">{o.status}</td>
-                  <td className="p-3 text-xs text-brand-ink/50">
-                    {new Date(o.createdAt).toLocaleDateString('en-IN')}
-                  </td>
-                  <td className="p-3">
-                    <Link href={`/admin/orders/${o._id}`} className="text-brand-magenta font-medium">View</Link>
-                  </td>
-                </tr>
-              ))}
+              {orders.map((o) => {
+                const tracking = o.courier?.trackingId || o.courier?.awbNumber;
+                const products = itemsSummary(o.items);
+                return (
+                  <tr key={o._id} className="border-b border-brand-ink/5 align-top">
+                    <td className="p-3">
+                      <span className="font-medium">{o.orderNumber}</span>
+                      {tracking && (
+                        <div className="text-xs text-brand-ink/50 mt-0.5">Track: {tracking}</div>
+                      )}
+                      {products && (
+                        <div className="text-xs text-brand-ink/50 mt-0.5 max-w-[240px] truncate" title={products}>
+                          {products}
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      {o.customer?.name}
+                      <br />
+                      <span className="text-xs text-brand-ink/50">{o.customer?.phone}</span>
+                    </td>
+                    <td className="p-3">{formatINR(o.total)}</td>
+                    <td className="p-3"><PaymentBadge order={o} /></td>
+                    <td className="p-3 capitalize">{o.status}</td>
+                    <td className="p-3 text-xs text-brand-ink/50">
+                      {new Date(o.createdAt).toLocaleDateString('en-IN')}
+                    </td>
+                    <td className="p-3">
+                      <Link href={`/admin/orders/${o._id}`} className="text-brand-magenta font-medium">View</Link>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {orders.length === 0 && <p className="text-center text-brand-ink/40 py-10">No orders found.</p>}

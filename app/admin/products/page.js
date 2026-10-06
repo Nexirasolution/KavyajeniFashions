@@ -5,7 +5,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { Plus, Pencil, Trash2, UploadCloud } from 'lucide-react';
+import { Plus, Pencil, Trash2, UploadCloud, Search, X } from 'lucide-react';
 import { formatINR } from '@/lib/utils';
 import { ZoomableImage } from '@/components/ImageLightbox';
 
@@ -33,7 +33,7 @@ function ProductThumb({ product }) {
 
   if (!src || failed) {
     return (
-      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-brand-cream font-display font-bold text-brand-magenta">
+      <div className="grid h-12 w-12 sm:h-10 sm:w-10 shrink-0 place-items-center rounded-lg bg-brand-cream font-display font-bold text-brand-magenta">
         {(product.name || '?').charAt(0).toUpperCase()}
       </div>
     );
@@ -43,8 +43,16 @@ function ProductThumb({ product }) {
       src={src}
       alt={product.name || ''}
       onError={() => setFailed(true)}
-      className="h-10 w-10 rounded-lg bg-brand-cream object-cover"
+      className="h-12 w-12 sm:h-10 sm:w-10 shrink-0 rounded-lg bg-brand-cream object-cover"
     />
+  );
+}
+
+function StatusBadge({ active }) {
+  return (
+    <span className={`px-2 py-1 rounded-full text-xs whitespace-nowrap ${active ? 'bg-brand-green/15 text-brand-deepgreen' : 'bg-brand-ink/10 text-brand-ink/50'}`}>
+      {active ? 'Active' : 'Hidden'}
+    </span>
   );
 }
 
@@ -55,26 +63,74 @@ export default function AdminProductsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [selected, setSelected] = useState(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [search, setSearch] = useState(''); // what's typed in the box
+  const [query, setQuery] = useState('');   // what's actually applied
+  const [categories, setCategories] = useState([]);
+  const [category, setCategory] = useState(''); // category slug ('' = all)
+
+  // Load categories for the dropdown. Adjust the URL if your categories
+  // endpoint is different. Accepts either an array or { categories: [...] }.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/categories');
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : data.categories || [];
+        if (!cancelled) setCategories(list);
+      } catch {
+        /* dropdown just stays empty */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) });
-    const res = await fetch(`/api/admin/products?${params.toString()}`);
-    const data = await res.json();
-    setProducts(data.products || []);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) });
+      if (query) params.set('search', query);
+      if (category) params.set('category', category);
+      const res = await fetch(`/api/admin/products?${params.toString()}`);
+      const data = await res.json();
+      setProducts(data.products || []);
 
-    if (typeof data.pages === 'number') {
-      setTotalPages(Math.max(1, data.pages));
-    } else if (typeof data.total === 'number') {
-      setTotalPages(Math.max(1, Math.ceil(data.total / PAGE_SIZE)));
-    } else {
+      if (typeof data.pages === 'number') {
+        setTotalPages(Math.max(1, data.pages));
+      } else if (typeof data.total === 'number') {
+        setTotalPages(Math.max(1, Math.ceil(data.total / PAGE_SIZE)));
+      } else {
+        setTotalPages(1);
+      }
+    } catch {
+      setProducts([]);
       setTotalPages(1);
+      toast.error('Failed to load products');
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
-  }, [page]);
+  }, [page, query, category]);
 
   useEffect(() => { load(); }, [load]);
+
+  function changeCategory(slug) {
+    setCategory(slug);
+    setPage(1);
+    setSelected(new Set());
+  }
+
+  function applySearch() {
+    setPage(1);
+    setSelected(new Set());
+    setQuery(search.trim());
+  }
+
+  function clearSearch() {
+    setSearch('');
+    setQuery('');
+    setPage(1);
+    setSelected(new Set());
+  }
 
   function toggleOne(id) {
     setSelected((prev) => {
@@ -144,89 +200,237 @@ export default function AdminProductsPage() {
     }
   }
 
+  // Parents first, each followed by its subcategories (indented in the dropdown).
+  const categoryOptions = (() => {
+    const parentOf = (c) => (c.parent && (c.parent._id || c.parent)) || null;
+    const roots = categories.filter((c) => !parentOf(c));
+    const out = [];
+    for (const r of roots) {
+      out.push({ ...r, isChild: false });
+      categories
+        .filter((c) => String(parentOf(c)) === String(r._id))
+        .forEach((c) => out.push({ ...c, isChild: true }));
+    }
+    // Anything whose parent isn't in the list still gets shown
+    categories.forEach((c) => {
+      if (!out.find((o) => o._id === c._id)) out.push({ ...c, isChild: true });
+    });
+    return out;
+  })();
+
   const pageIds = products.map((p) => p._id);
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
 
+  const emptyMessage =
+    query || category
+      ? `No products match${query ? ` "${query}"` : ''}${category ? ' in this category' : ''}.`
+      : 'No products yet. Add your first product!';
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
+      {/* Header + actions */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
         <h1 className="font-display text-2xl font-bold text-brand-magenta">Products</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {selected.size > 0 && (
             <button
               onClick={bulkRemove}
               disabled={bulkDeleting}
-              className="flex items-center gap-1 text-sm px-3 py-2 rounded-lg bg-red-600 text-white disabled:opacity-50"
+              className="flex items-center justify-center gap-1 text-sm px-3 py-2 rounded-lg bg-red-600 text-white disabled:opacity-50 w-full sm:w-auto"
             >
               <Trash2 size={16} />
               {bulkDeleting ? 'Deleting…' : `Delete (${selected.size})`}
             </button>
           )}
-          <Link href="/admin/products/bulk" className="btn-outline flex items-center gap-1 text-sm">
+          <Link href="/admin/products/bulk" className="btn-outline flex flex-1 sm:flex-none items-center justify-center gap-1 text-sm">
             <UploadCloud size={16} /> Bulk Upload
           </Link>
-          <Link href="/admin/products/new" className="btn-primary flex items-center gap-1 text-sm"><Plus size={16} /> Add Product</Link>
+          <Link href="/admin/products/new" className="btn-primary flex flex-1 sm:flex-none items-center justify-center gap-1 text-sm">
+            <Plus size={16} /> Add Product
+          </Link>
+        </div>
+      </div>
+
+      {/* Search + category filter */}
+      <div className="flex flex-col gap-3 sm:flex-row mb-4">
+        <div className="relative w-full sm:flex-1 sm:min-w-[220px]">
+          <button
+            type="button"
+            onClick={applySearch}
+            aria-label="Search products"
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-brand-ink/50 hover:text-brand-magenta"
+          >
+            <Search size={16} />
+          </button>
+          <input
+            type="search"
+            enterKeyHint="search"
+            placeholder="Search by name, SKU, or category"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && applySearch()}
+            className="w-full border rounded-lg pl-9 pr-9 py-2.5 sm:py-2 text-base sm:text-sm"
+          />
+          {(search || query) && (
+            <button
+              type="button"
+              onClick={clearSearch}
+              aria-label="Clear search"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-brand-ink/40 hover:text-brand-magenta"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
+        <div className="flex gap-3">
+          <select
+            value={category}
+            onChange={(e) => changeCategory(e.target.value)}
+            className="border rounded-lg px-3 py-2.5 sm:py-2 text-base sm:text-sm flex-1 min-w-0 sm:flex-none sm:max-w-[220px]"
+            aria-label="Filter by category"
+          >
+            <option value="">All Categories</option>
+            {categoryOptions.map((c) => (
+              <option key={c._id} value={c.slug}>
+                {c.isChild ? `— ${c.name}` : c.name}
+              </option>
+            ))}
+          </select>
+          <button onClick={applySearch} className="btn-outline text-sm shrink-0">Search</button>
         </div>
       </div>
 
       {loading ? (
         <p className="text-brand-ink/50">Loading...</p>
+      ) : products.length === 0 ? (
+        <div className="card-soft">
+          <p className="text-center text-brand-ink/40 py-10 px-4">{emptyMessage}</p>
+        </div>
       ) : (
-        <div className="card-soft overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left border-b border-brand-ink/10 text-brand-ink/50">
-                <th className="p-3 w-8">
-                  <input
-                    type="checkbox"
-                    checked={allOnPageSelected}
-                    onChange={toggleAllOnPage}
-                    aria-label="Select all on page"
-                  />
-                </th>
-                <th className="p-3">Product</th>
-                <th className="p-3">Category</th>
-                <th className="p-3">Price</th>
-                <th className="p-3">Variants</th>
-                <th className="p-3">Status</th>
-                <th className="p-3"></th>
-              </tr>
-            </thead>
-            <tbody>
+        <>
+          {/* Desktop / tablet: table */}
+          <div className="card-soft overflow-x-auto hidden md:block">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left border-b border-brand-ink/10 text-brand-ink/50">
+                  <th className="p-3 w-8">
+                    <input
+                      type="checkbox"
+                      checked={allOnPageSelected}
+                      onChange={toggleAllOnPage}
+                      aria-label="Select all on page"
+                    />
+                  </th>
+                  <th className="p-3">Product</th>
+                  <th className="p-3">Category</th>
+                  <th className="p-3">Price</th>
+                  <th className="p-3">Variants</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((p) => (
+                  <tr key={p._id} className="border-b border-brand-ink/5">
+                    <td className="p-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(p._id)}
+                        onChange={() => toggleOne(p._id)}
+                        aria-label={`Select ${p.name}`}
+                      />
+                    </td>
+                    <td className="p-3 font-medium">
+                      <div className="flex items-center gap-3">
+                        <ProductThumb product={p} />
+                        <div>
+                          <span>{p.name}</span>
+                          {p.sku && (
+                            <div className="text-xs font-normal text-brand-ink/50">SKU: {p.sku}</div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-3 text-brand-ink/60">{p.category?.name}</td>
+                    <td className="p-3 whitespace-nowrap">{formatINR(p.basePrice)}</td>
+                    <td className="p-3">{p.variants?.length}</td>
+                    <td className="p-3"><StatusBadge active={p.isActive} /></td>
+                    <td className="p-3">
+                      <div className="flex gap-2 justify-end">
+                        <Link href={`/admin/products/${p._id}/edit`} className="p-1.5 text-brand-magenta" aria-label={`Edit ${p.name}`}><Pencil size={16} /></Link>
+                        <button onClick={() => remove(p._id)} className="p-1.5 text-brand-magenta" aria-label={`Delete ${p.name}`}><Trash2 size={16} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile: card list */}
+          <div className="md:hidden">
+            <label className="flex items-center gap-2 px-1 pb-2 text-sm text-brand-ink/60">
+              <input
+                type="checkbox"
+                checked={allOnPageSelected}
+                onChange={toggleAllOnPage}
+              />
+              Select all on page
+            </label>
+
+            <div className="space-y-3">
               {products.map((p) => (
-                <tr key={p._id} className="border-b border-brand-ink/5">
-                  <td className="p-3">
+                <div key={p._id} className="card-soft p-3">
+                  <div className="flex items-start gap-3">
                     <input
                       type="checkbox"
                       checked={selected.has(p._id)}
                       onChange={() => toggleOne(p._id)}
                       aria-label={`Select ${p.name}`}
+                      className="mt-1 h-4 w-4 shrink-0"
                     />
-                  </td>
-                  <td className="p-3 font-medium">
-                    <div className="flex items-center gap-3">
-                      <ProductThumb product={p} />
-                      <span>{p.name}</span>
+                    <ProductThumb product={p} />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium leading-snug break-words">{p.name}</p>
+                      {p.sku && (
+                        <p className="text-xs text-brand-ink/50 mt-0.5 break-all">SKU: {p.sku}</p>
+                      )}
+                      {p.category?.name && (
+                        <p className="text-xs text-brand-ink/60 mt-0.5">{p.category.name}</p>
+                      )}
                     </div>
-                  </td>
-                  <td className="p-3 text-brand-ink/60">{p.category?.name}</td>
-                  <td className="p-3">{formatINR(p.basePrice)}</td>
-                  <td className="p-3">{p.variants?.length}</td>
-                  <td className="p-3">
-                    <span className={`px-2 py-1 rounded-full text-xs ${p.isActive ? 'bg-brand-green/15 text-brand-deepgreen' : 'bg-brand-ink/10 text-brand-ink/50'}`}>
-                      {p.isActive ? 'Active' : 'Hidden'}
-                    </span>
-                  </td>
-                  <td className="p-3 flex gap-2 justify-end">
-                    <Link href={`/admin/products/${p._id}/edit`} className="p-1.5 text-brand-magenta"><Pencil size={16} /></Link>
-                    <button onClick={() => remove(p._id)} className="p-1.5 text-brand-magenta"><Trash2 size={16} /></button>
-                  </td>
-                </tr>
+                    <StatusBadge active={p.isActive} />
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between border-t border-brand-ink/5 pt-3 text-sm">
+                    <div>
+                      <span className="font-medium">{formatINR(p.basePrice)}</span>
+                      <span className="text-xs text-brand-ink/50 ml-2">
+                        {p.variants?.length || 0} variant{p.variants?.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <div className="flex gap-1">
+                      <Link
+                        href={`/admin/products/${p._id}/edit`}
+                        className="p-2 text-brand-magenta"
+                        aria-label={`Edit ${p.name}`}
+                      >
+                        <Pencil size={18} />
+                      </Link>
+                      <button
+                        onClick={() => remove(p._id)}
+                        className="p-2 text-brand-magenta"
+                        aria-label={`Delete ${p.name}`}
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
-          {products.length === 0 && <p className="text-center text-brand-ink/40 py-10">No products yet. Add your first product!</p>}
-        </div>
+            </div>
+          </div>
+        </>
       )}
 
       {!loading && totalPages > 1 && (
@@ -258,24 +462,32 @@ function Pagination({ page, totalPages, onPageChange }) {
         Prev
       </button>
 
-      {pageNumbers.map((p, i) =>
-        p === '...' ? (
-          <span key={`ellipsis-${i}`} className="px-2 text-brand-ink/40">
-            …
-          </span>
-        ) : (
-          <button
-            key={p}
-            onClick={() => goTo(p)}
-            aria-current={p === page ? 'page' : undefined}
-            className={`min-w-9 h-9 px-2 rounded-lg text-sm font-medium transition-colors ${
-              p === page ? 'bg-brand-magenta text-white' : 'text-brand-ink/70 hover:bg-brand-cream'
-            }`}
-          >
-            {p}
-          </button>
-        )
-      )}
+      {/* Phones: compact "Page x of y" instead of numbered buttons */}
+      <span className="sm:hidden px-3 text-sm text-brand-ink/70">
+        Page {page} of {totalPages}
+      </span>
+
+      {/* Tablet / desktop: numbered buttons */}
+      <div className="hidden sm:flex items-center gap-1">
+        {pageNumbers.map((p, i) =>
+          p === '...' ? (
+            <span key={`ellipsis-${i}`} className="px-2 text-brand-ink/40">
+              …
+            </span>
+          ) : (
+            <button
+              key={p}
+              onClick={() => goTo(p)}
+              aria-current={p === page ? 'page' : undefined}
+              className={`min-w-9 h-9 px-2 rounded-lg text-sm font-medium transition-colors ${
+                p === page ? 'bg-brand-magenta text-white' : 'text-brand-ink/70 hover:bg-brand-cream'
+              }`}
+            >
+              {p}
+            </button>
+          )
+        )}
+      </div>
 
       <button
         onClick={() => goTo(page + 1)}

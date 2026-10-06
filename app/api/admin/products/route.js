@@ -6,7 +6,9 @@ import Product from '@/models/Product';
 import Category from '@/models/Category';
 import { requireAdmin } from '@/lib/apiAuth';
 
-// GET /api/admin/products?category=slug&sort=newest&page=1&limit=1000
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// GET /api/admin/products?category=slug&search=text&sort=newest&page=1&limit=1000
 // Admin-only: returns ALL products (active + hidden), unlike the public
 // /api/products route which only ever returns active ones.
 export const GET = requireAdmin(async (req) => {
@@ -23,8 +25,22 @@ export const GET = requireAdmin(async (req) => {
         ? { $in: [cat._id, ...subcategoryIds] }
         : cat._id;
     } else {
-      return NextResponse.json({ products: [], total: 0 });
+      return NextResponse.json({ products: [], total: 0, page: 1, pages: 1 });
     }
+  }
+
+  // Free-text search: product name, SKU (product or variant), or category name.
+  const search = (searchParams.get('search') || '').trim();
+  if (search) {
+    const rx = { $regex: escapeRegex(search), $options: 'i' };
+    const matchingCategoryIds = await Category.find({ name: rx }).distinct('_id');
+
+    query.$or = [
+      { name: rx },
+      { sku: rx },               // product-level SKU
+      { 'variants.sku': rx },    // variant-level SKU
+      { category: { $in: matchingCategoryIds } },
+    ];
   }
 
   const sort = searchParams.get('sort') || 'newest';
@@ -36,10 +52,10 @@ export const GET = requireAdmin(async (req) => {
     rating: { rating: -1 },
   };
 
-  const page = Number(searchParams.get('page') || 1);
+  const page = Math.max(1, Number(searchParams.get('page') || 1) || 1);
   // Admin-only route, so default to a high limit instead of the
   // public storefront's page size of 24 — this dropdown needs every product.
-  const limit = Number(searchParams.get('limit') || 1000);
+  const limit = Math.max(1, Number(searchParams.get('limit') || 1000) || 1000);
 
   const [products, total] = await Promise.all([
     Product.find(query)
