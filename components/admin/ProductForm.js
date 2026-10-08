@@ -177,7 +177,13 @@ export default function ProductForm({ initial, productId }) {
     setSaving(false);
     if (res.ok) {
       toast.success(productId ? 'Product updated' : 'Product created');
-      router.push('/admin/products');
+      // Return to the same list page / search / category the admin came from.
+      // The edit link passes them along as a query string (?page=2&q=...).
+      // It also passes focus=<id> so the list scrolls back to this product.
+      const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+      if (productId) params.set('focus', productId);
+      const qs = params.toString();
+      router.push(`/admin/products${qs ? `?${qs}` : ''}`);
     } else {
       toast.error(data.error || 'Something went wrong');
     }

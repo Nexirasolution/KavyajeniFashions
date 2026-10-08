@@ -2,8 +2,9 @@
 
 // Location: app/admin/products/page.js
 
-import { useEffect, useState, useCallback } from 'react';
+import { Suspense, useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { Plus, Pencil, Trash2, UploadCloud, Search, X } from 'lucide-react';
 import { formatINR } from '@/lib/utils';
@@ -56,17 +57,53 @@ function StatusBadge({ active }) {
   );
 }
 
+// useSearchParams() must be inside a Suspense boundary in the App Router.
 export default function AdminProductsPage() {
+  return (
+    <Suspense fallback={<p className="text-brand-ink/50">Loading...</p>}>
+      <ProductsInner />
+    </Suspense>
+  );
+}
+
+function ProductsInner() {
+  const router = useRouter();
+  const sp = useSearchParams();
+
+  // The URL is the source of truth for page / search / category, so the
+  // admin returns to the same place after editing a product.
+  const page = Math.max(1, Number(sp.get('page')) || 1);
+  const query = sp.get('q') || '';
+  const category = sp.get('category') || '';
+  // Product to scroll back to after editing (set by ProductForm on save)
+  const focusId = sp.get('focus') || '';
+  const cleanParams = new URLSearchParams(sp.toString());
+  cleanParams.delete('focus');
+  const listQs = cleanParams.toString() ? `?${cleanParams.toString()}` : '';
+
+  function setParams(updates) {
+    const p = new URLSearchParams(sp.toString());
+    p.delete('focus');
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === '' || v == null || (k === 'page' && Number(v) === 1)) p.delete(k);
+      else p.set(k, String(v));
+    }
+    const qs = p.toString();
+    router.replace(`/admin/products${qs ? `?${qs}` : ''}`, { scroll: false });
+  }
+
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [selected, setSelected] = useState(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
-  const [search, setSearch] = useState(''); // what's typed in the box
-  const [query, setQuery] = useState('');   // what's actually applied
+  const [search, setSearch] = useState(query); // what's typed in the box
   const [categories, setCategories] = useState([]);
-  const [category, setCategory] = useState(''); // category slug ('' = all)
+
+  // Keep the search box in sync when the URL changes (back/forward buttons)
+  useEffect(() => {
+    setSearch(query);
+  }, [query]);
 
   // Load categories for the dropdown. Adjust the URL if your categories
   // endpoint is different. Accepts either an array or { categories: [...] }.
@@ -113,23 +150,45 @@ export default function AdminProductsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // After editing, scroll back to the product that was just updated and
+  // highlight it briefly, so the admin can carry on from the same spot.
+  const [highlightId, setHighlightId] = useState('');
+  useEffect(() => {
+    if (!focusId || loading) return undefined;
+    const raf = requestAnimationFrame(() => {
+      // The table and the mobile card list both render; pick the visible one
+      const el = Array.from(document.querySelectorAll('[data-product-id]')).find(
+        (n) => n.dataset.productId === focusId && n.offsetParent !== null
+      );
+      if (el) {
+        el.scrollIntoView({ block: 'center' });
+        setHighlightId(focusId);
+        setTimeout(() => setHighlightId(''), 2500);
+      }
+      // Drop ?focus= so a refresh doesn't scroll again
+      const p = new URLSearchParams(sp.toString());
+      p.delete('focus');
+      const qs = p.toString();
+      router.replace(`/admin/products${qs ? `?${qs}` : ''}`, { scroll: false });
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, loading, products]);
+
   function changeCategory(slug) {
-    setCategory(slug);
-    setPage(1);
     setSelected(new Set());
+    setParams({ category: slug, page: 1 });
   }
 
   function applySearch() {
-    setPage(1);
     setSelected(new Set());
-    setQuery(search.trim());
+    setParams({ q: search.trim(), page: 1 });
   }
 
   function clearSearch() {
     setSearch('');
-    setQuery('');
-    setPage(1);
     setSelected(new Set());
+    setParams({ q: '', page: 1 });
   }
 
   function toggleOne(id) {
@@ -161,7 +220,7 @@ export default function AdminProductsPage() {
         return next;
       });
       if (products.length === 1 && page > 1) {
-        setPage((p) => p - 1);
+        setParams({ page: page - 1 });
       } else {
         load();
       }
@@ -186,7 +245,7 @@ export default function AdminProductsPage() {
         const deletedOnThisPage = products.filter((p) => ids.includes(p._id)).length;
         setSelected(new Set());
         if (deletedOnThisPage >= products.length && page > 1) {
-          setPage((p) => p - 1);
+          setParams({ page: page - 1 });
         } else {
           load();
         }
@@ -331,7 +390,11 @@ export default function AdminProductsPage() {
               </thead>
               <tbody>
                 {products.map((p) => (
-                  <tr key={p._id} className="border-b border-brand-ink/5">
+                  <tr
+                    key={p._id}
+                    data-product-id={p._id}
+                    className={`border-b border-brand-ink/5 transition-colors duration-700 ${highlightId === p._id ? 'bg-brand-magenta/10' : ''}`}
+                  >
                     <td className="p-3">
                       <input
                         type="checkbox"
@@ -357,7 +420,7 @@ export default function AdminProductsPage() {
                     <td className="p-3"><StatusBadge active={p.isActive} /></td>
                     <td className="p-3">
                       <div className="flex gap-2 justify-end">
-                        <Link href={`/admin/products/${p._id}/edit`} className="p-1.5 text-brand-magenta" aria-label={`Edit ${p.name}`}><Pencil size={16} /></Link>
+                        <Link href={`/admin/products/${p._id}/edit${listQs}`} className="p-1.5 text-brand-magenta" aria-label={`Edit ${p.name}`}><Pencil size={16} /></Link>
                         <button onClick={() => remove(p._id)} className="p-1.5 text-brand-magenta" aria-label={`Delete ${p.name}`}><Trash2 size={16} /></button>
                       </div>
                     </td>
@@ -380,7 +443,11 @@ export default function AdminProductsPage() {
 
             <div className="space-y-3">
               {products.map((p) => (
-                <div key={p._id} className="card-soft p-3">
+                <div
+                  key={p._id}
+                  data-product-id={p._id}
+                  className={`card-soft p-3 transition-shadow duration-700 ${highlightId === p._id ? 'ring-2 ring-brand-magenta/50' : ''}`}
+                >
                   <div className="flex items-start gap-3">
                     <input
                       type="checkbox"
@@ -411,7 +478,7 @@ export default function AdminProductsPage() {
                     </div>
                     <div className="flex gap-1">
                       <Link
-                        href={`/admin/products/${p._id}/edit`}
+                        href={`/admin/products/${p._id}/edit${listQs}`}
                         className="p-2 text-brand-magenta"
                         aria-label={`Edit ${p.name}`}
                       >
@@ -434,7 +501,7 @@ export default function AdminProductsPage() {
       )}
 
       {!loading && totalPages > 1 && (
-        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+        <Pagination page={page} totalPages={totalPages} onPageChange={(n) => setParams({ page: n })} />
       )}
     </div>
   );
