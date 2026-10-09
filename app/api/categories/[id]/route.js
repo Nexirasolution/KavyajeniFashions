@@ -8,7 +8,8 @@ function getFilter(id) {
   return mongoose.isValidObjectId(id) ? { _id: id } : { slug: id };
 }
 
-export async function GET(req, { params }) {
+export async function GET(req, props) {
+  const params = await props.params;
   await dbConnect();
 
   const category = await Category.findOne(getFilter(params.id)).populate('parent', 'name slug');

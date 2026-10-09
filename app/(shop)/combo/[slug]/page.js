@@ -6,7 +6,12 @@ import { formatINR } from '@/lib/utils';
 import AddComboButton from '@/components/AddComboButton';
 import { Package, Tag, CheckCircle2, Zap, RotateCcw, Shield, Truck } from 'lucide-react';
 
-export default async function ComboPage({ params }) {
+// @next-codemod-ignore Cache Components adoption: this segment temporarily allows blocking.
+// Remove this opt-out after verifying the segment passes validation without it.
+// See: https://nextjs.org/docs/app/guides/migrating-to-cache-components
+
+export default async function ComboPage(props) {
+  const params = await props.params;
   await dbConnect();
   const combo = await Combo.findOne({ slug: params.slug, isActive: true })
     .populate('products.product', 'name slug variants')

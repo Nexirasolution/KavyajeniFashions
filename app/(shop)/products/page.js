@@ -7,6 +7,10 @@ import Product from '@/models/Product';
 import { inStockFilter } from '@/lib/stockFilter';
 import '@/models/Category'; // registers the Category schema — required for .populate('category')
 
+// @next-codemod-ignore Cache Components adoption: this segment temporarily allows blocking.
+// Remove this opt-out after verifying the segment passes validation without it.
+// See: https://nextjs.org/docs/app/guides/migrating-to-cache-components
+
 const LIMIT = 100;
 
 async function getAllProducts(page) {
@@ -36,7 +40,8 @@ export const metadata = {
   title: 'All Products | Kavyajeni Fashions',
 };
 
-export default async function ProductsPage({ searchParams }) {
+export default async function ProductsPage(props) {
+  const searchParams = await props.searchParams;
   const page = Math.max(1, Number(searchParams?.page) || 1);
   const { products, total, pages } = await getAllProducts(page);
 

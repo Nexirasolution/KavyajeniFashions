@@ -4,7 +4,12 @@ import Order from '@/models/Order';
 import Settings from '@/models/Settings';
 import PrintButton from '@/components/PrintButton';
 
-export default async function CourierBillPage({ params }) {
+// @next-codemod-ignore Cache Components adoption: this segment temporarily allows blocking.
+// Remove this opt-out after verifying the segment passes validation without it.
+// See: https://nextjs.org/docs/app/guides/migrating-to-cache-components
+
+export default async function CourierBillPage(props) {
+  const params = await props.params;
   await dbConnect();
   const order = await Order.findById(params.orderId).lean();
   const settings = await Settings.findOne({ key: 'global' }).lean();

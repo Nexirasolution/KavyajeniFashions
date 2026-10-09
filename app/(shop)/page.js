@@ -17,6 +17,10 @@ import Image from 'next/image';
 import { formatINR } from '@/lib/utils';
 import { Zap, ArrowRight, Tag } from 'lucide-react';
 
+// @next-codemod-ignore Cache Components adoption: this segment temporarily allows blocking.
+// Remove this opt-out after verifying the segment passes validation without it.
+// See: https://nextjs.org/docs/app/guides/migrating-to-cache-components
+
 // ISR: cached HTML is served to everyone; Mongo is hit at most once per
 // window, or immediately when an admin route calls revalidateTag().
 export const revalidate = 300; // 5 minutes

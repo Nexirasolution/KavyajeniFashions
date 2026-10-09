@@ -5,7 +5,8 @@ import Review from '@/models/Review';
 import Product from '@/models/Product';
 
 // POST /api/orders/:id/review -> customer rates one product from their own delivered order
-export async function POST(req, { params }) {
+export async function POST(req, props) {
+  const params = await props.params;
   await dbConnect();
   const body = await req.json();
   const { phone, productId, rating, comment, images } = body;

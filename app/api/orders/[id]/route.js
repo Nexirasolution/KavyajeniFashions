@@ -4,7 +4,8 @@ import Order from '@/models/Order';
 import { requireAdmin } from '@/lib/apiAuth';
 
 // Public: track/view a single order (used on order-success page)
-export async function GET(req, { params }) {
+export async function GET(req, props) {
+  const params = await props.params;
   await dbConnect();
   const order = await Order.findOne({ $or: [{ _id: params.id }, { orderNumber: params.id }] });
   if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 });

@@ -7,6 +7,10 @@ import Review from '@/models/Review';
 import '@/models/Category'; // make sure the model is registered for populate()
 import ProductPageClient from './ProductPageClient';
 
+// @next-codemod-ignore Cache Components adoption: this segment temporarily allows blocking.
+// Remove this opt-out after verifying the segment passes validation without it.
+// See: https://nextjs.org/docs/app/guides/migrating-to-cache-components
+
 export const revalidate = 3600;
 
 // Query Mongo directly (no HTTP self-call to /api/products/[slug]).
@@ -47,7 +51,8 @@ function getProductData(slug) {
   )();
 }
 
-export async function generateMetadata({ params }) {
+export async function generateMetadata(props) {
+  const params = await props.params;
   const data = await getProductData(params.slug);
   if (!data) return {};
   const { product } = data;
@@ -74,7 +79,8 @@ export async function generateStaticParams() {
   }
 }
 
-export default async function ProductPage({ params }) {
+export default async function ProductPage(props) {
+  const params = await props.params;
   const data = await getProductData(params.slug);
   if (!data?.product) notFound();
   return <ProductPageClient data={data} />;

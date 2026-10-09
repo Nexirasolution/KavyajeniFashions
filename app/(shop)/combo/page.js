@@ -5,6 +5,10 @@ import Link from 'next/link';
 import { formatINR } from '@/lib/utils';
 import { Tag, Zap } from 'lucide-react';
 
+// @next-codemod-ignore Cache Components adoption: this segment temporarily allows blocking.
+// Remove this opt-out after verifying the segment passes validation without it.
+// See: https://nextjs.org/docs/app/guides/migrating-to-cache-components
+
 async function getCombos() {
   await dbConnect();
   const combos = await Combo.find({ isActive: true }).sort({ createdAt: -1 }).lean();
