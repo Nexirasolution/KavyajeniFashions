@@ -3,14 +3,16 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import mongoose from 'mongoose';
+import { revalidateTag } from 'next/cache';
 import { dbConnect } from '@/lib/mongodb';
 import Product from '@/models/Product';
 import { requireAdmin } from '@/lib/apiAuth';
+import { deleteProductImagesFromR2 } from '@/lib/deleteProductImages';
 
 const MAX_IDS = 1000;
 const MAX_QTY = 100000;
 const MODES = ['set', 'add', 'subtract', 'zero'];
+const OBJECT_ID = /^[a-f\d]{24}$/i; // strict: exactly 24 hex chars
 
 const bad = (message) => NextResponse.json({ error: message }, { status: 400 });
 
@@ -27,6 +29,19 @@ function nextStock(current, mode, value) {
       return Math.max(0, c - value); // never goes below 0
     default:
       return c;
+  }
+}
+
+// Clears the storefront caches for the given products (same tags as the
+// single-product PUT/DELETE in app/api/products/[id]/route.js).
+function revalidateProducts(products) {
+  try {
+    for (const slug of new Set(products.map((p) => p.slug).filter(Boolean))) {
+      revalidateTag(`product-${slug}`);
+    }
+    revalidateTag('product-list');
+  } catch (err) {
+    console.error('Revalidation failed:', err);
   }
 }
 
@@ -47,12 +62,28 @@ export const POST = requireAdmin(async (req) => {
 
   if (!Array.isArray(ids) || ids.length === 0) return bad('Select at least one product');
   if (ids.length > MAX_IDS) return bad(`Select at most ${MAX_IDS} products at a time`);
-  if (!ids.every((id) => typeof id === 'string' && mongoose.isValidObjectId(id))) {
+  if (!ids.every((id) => typeof id === 'string' && OBJECT_ID.test(id))) {
     return bad('Invalid product id');
   }
 
   if (action === 'delete') {
-    const result = await Product.deleteMany({ _id: { $in: ids } });
+    // Load the products first: we need their images (R2 cleanup) and slugs (cache tags)
+    const products = await Product.find({ _id: { $in: ids } }).lean();
+    if (products.length === 0) return NextResponse.json({ deleted: 0 });
+
+    // Best-effort R2 cleanup, one product at a time so one failure doesn't block the rest
+    await Promise.all(
+      products.map(async (p) => {
+        try {
+          await deleteProductImagesFromR2(p);
+        } catch (err) {
+          console.error(`R2 image cleanup failed for ${p._id}:`, err);
+        }
+      })
+    );
+
+    const result = await Product.deleteMany({ _id: { $in: products.map((p) => p._id) } });
+    revalidateProducts(products);
     return NextResponse.json({ deleted: result.deletedCount });
   }
 
@@ -63,24 +94,29 @@ export const POST = requireAdmin(async (req) => {
       return bad('Enter a whole number, 0 or more');
     }
 
-    const products = await Product.find({ _id: { $in: ids } }).select('variants').lean();
+    const products = await Product.find({ _id: { $in: ids } })
+      .select('slug variants')
+      .lean();
     if (products.length === 0) return NextResponse.json({ updated: 0 });
 
-    const ops = products.map((p) => ({
-      updateOne: {
-        filter: { _id: p._id },
-        update: {
-          $set: {
-            variants: (p.variants || []).map((v) => ({
-              ...v,
-              sizes: (v.sizes || []).map((s) => ({ ...s, stock: nextStock(s.stock, mode, qty) })),
-            })),
-          },
-        },
-      },
-    }));
+    // Set only each size's `stock` field by position instead of rewriting the whole
+    // variants array, so other fields (and concurrent edits to them) are untouched.
+    const ops = products
+      .map((p) => {
+        const $set = {};
+        (p.variants || []).forEach((v, vi) => {
+          (v.sizes || []).forEach((s, si) => {
+            $set[`variants.${vi}.sizes.${si}.stock`] = nextStock(s.stock, mode, qty);
+          });
+        });
+        if (Object.keys($set).length === 0) return null;
+        return { updateOne: { filter: { _id: p._id }, update: { $set } } };
+      })
+      .filter(Boolean);
 
-    await Product.bulkWrite(ops);
+    if (ops.length) await Product.bulkWrite(ops);
+
+    revalidateProducts(products);
     return NextResponse.json({ updated: products.length });
   }
 

@@ -1,3 +1,5 @@
+// Location: app/api/products/[id]/route.js
+
 import { NextResponse } from 'next/server';
 import { revalidateTag } from 'next/cache';
 import mongoose from 'mongoose';
@@ -12,11 +14,11 @@ function getFilter(id) {
 }
 
 export async function GET(req, props) {
-  const params = await props.params;
+  const { id } = await props.params;
   await dbConnect();
 
   const product = await Product.findOne({
-    ...getFilter(params.id),
+    ...getFilter(id),
     isActive: true,
   }).populate('category', 'name slug sizes');
 
@@ -36,21 +38,30 @@ export async function GET(req, props) {
 }
 
 export const PUT = requireAdmin(async (req, { params }) => {
+  // In Next.js 15+, `params` is a Promise and must be awaited.
+  const { id } = await params;
   await dbConnect();
-  const body = await req.json();
 
-  if (body.variants?.length) {
-    body.basePrice = Math.min(...body.variants.map((v) => v.price));
+  let body;
+  try {
+    body = await req.json();
+  } catch (err) {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const product = await Product.findOneAndUpdate(getFilter(params.id), body, { new: true });
+  // Recompute basePrice from variant prices, ignoring any missing/invalid price
+  // so a variant without one can never overwrite basePrice with NaN.
+  if (body.variants?.length) {
+    const prices = body.variants.map((v) => Number(v.price)).filter((p) => Number.isFinite(p));
+    if (prices.length) body.basePrice = Math.min(...prices);
+  }
+
+  const product = await Product.findOneAndUpdate(getFilter(id), body, { new: true });
   if (!product) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
 
   // The product detail page is server-rendered with a long `revalidate`
-  // window (see app/product/[slug]/page.js) so that we don't hit Mongo
-  // on every visit. Since edits should show up immediately rather than
-  // waiting out that window, invalidate its tag explicitly here instead
-  // of shortening the window for everyone.
+  // window (see app/product/[slug]/page.js). Invalidate its tag explicitly so
+  // edits show up immediately.
   revalidateTag(`product-${product.slug}`);
   revalidateTag('product-list'); // homepage / listing tabs, if they use this tag
 
@@ -58,12 +69,13 @@ export const PUT = requireAdmin(async (req, { params }) => {
 });
 
 export const DELETE = requireAdmin(async (req, { params }) => {
+  const { id } = await params;
   await dbConnect();
 
-  const product = await Product.findOne(getFilter(params.id));
+  const product = await Product.findOne(getFilter(id));
   if (!product) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
 
-  // Best-effort R2 cleanup — a storage hiccup shouldn't block the DB delete
+  // Best-effort R2 cleanup: a storage hiccup shouldn't block the DB delete
   try {
     await deleteProductImagesFromR2(product);
   } catch (err) {

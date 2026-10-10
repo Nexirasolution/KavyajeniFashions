@@ -12,8 +12,10 @@ import { requireAdmin } from '@/lib/apiAuth';
 // Returns EVERY active product (including ones with 0 stock) with its category and parent
 // category. Pagination and category grouping happen on the client.
 //
-// `description` is included (but never `price`) so the bulk Share action can build a
-// message from name + description without ever exposing price.
+// NOTE: `variants` is returned whole, so each variant's `price` IS included.
+// This is required: the inventory page saves stock by PUTting the full variants
+// array back, so stripping `price` here would erase prices on save. The Share
+// feature never reads price (it only uses name + description + image).
 export const GET = requireAdmin(async () => {
   await dbConnect();
 
