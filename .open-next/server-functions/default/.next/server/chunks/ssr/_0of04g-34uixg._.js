@@ -1,3 +1,0 @@
-(()=>{"use strict";module.exports=[77860,a=>{a.s(["T",0,function(a){let b=new Date;return b.setDate(b.getDate()-a),b.setHours(0,0,0,0),b},"O",0,function(a){return new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(a||0)}])},73570,a=>{let b=(0,a.i(70106).f)("TriangleAlert",[["path",{d:"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",key:"wmoenq"}],["path",{d:"M12 9v4",key:"juzpu7"}],["path",{d:"M12 17h.01",key:"p32p05"}]]);a.s(["f",0,b],73570)}]})();
-
-//# sourceMappingURL=_0of04g-34uixg._.js.map

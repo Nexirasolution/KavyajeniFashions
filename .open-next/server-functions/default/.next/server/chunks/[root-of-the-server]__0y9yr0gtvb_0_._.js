@@ -1,3 +1,0 @@
-module.exports=[81531,(e,s,o)=>{s.exports=e.x("@aws-sdk/client-s3-ecbef8e33fd0b8f0",()=>require("@aws-sdk/client-s3-ecbef8e33fd0b8f0"))},60526,(e,s,o)=>{s.exports=e.x("node:os",()=>require("node:os"))},50227,(e,s,o)=>{s.exports=e.x("node:path",()=>require("node:path"))},12911,e=>{"use strict";let s=new(e.i(81531)).S3Client({region:"auto",endpoint:`https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,credentials:{accessKeyId:process.env.R2_ACCESS_KEY_ID,secretAccessKey:process.env.R2_SECRET_ACCESS_KEY},requestChecksumCalculation:"WHEN_REQUIRED",responseChecksumValidation:"WHEN_REQUIRED"});e.s(["f",0,s])}];
-
-//# sourceMappingURL=%5Broot-of-the-server%5D__0y9yr0gtvb_0_._.js.map

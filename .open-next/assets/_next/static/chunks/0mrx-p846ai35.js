@@ -1,1 +1,0 @@
-(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,63170,t=>{"use strict";var e=t.i(43476);t.s(["default",0,function({label:t="Print / Save as PDF"}){return(0,e.jsx)("div",{className:"text-center mt-6 print:hidden",children:(0,e.jsx)("button",{onClick:()=>window.print(),className:"btn-primary",children:t})})}])}]);
