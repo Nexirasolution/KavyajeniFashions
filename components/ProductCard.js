@@ -25,6 +25,9 @@ export default function ProductCard({ product }) {
 
   const totalStock = variant?.sizes?.reduce((s, sz) => s + (sz.stock || 0), 0);
   const lowStock = typeof totalStock === 'number' && totalStock > 0 && totalStock <= 5;
+  // Only flagged when stock data exists and is zero. Products without
+  // `sizes` data (totalStock undefined) are treated as purchasable.
+  const outOfStock = typeof totalStock === 'number' && totalStock <= 0;
 
   function buildItem() {
     return {
@@ -42,6 +45,7 @@ export default function ProductCard({ product }) {
 
   function handleAddToCart(e) {
     e.preventDefault();
+    if (outOfStock) return;
     setAdding(true);
     addItem(buildItem());
     toast.success('Added to cart!');
@@ -50,6 +54,7 @@ export default function ProductCard({ product }) {
 
   function handleBuyNow(e) {
     e.preventDefault();
+    if (outOfStock) return;
     addItem(buildItem());
     router.push('/checkout');
   }
@@ -76,8 +81,19 @@ export default function ProductCard({ product }) {
             // keeps card-grid renders (the highest-traffic image usage
             // on the site) off the Image Optimization bill.
             unoptimized
-            className="object-cover group-hover:scale-105 transition-transform duration-500"
+            className={`object-cover group-hover:scale-105 transition-transform duration-500 ${
+              outOfStock ? 'grayscale opacity-60' : ''
+            }`}
           />
+
+          {/* Out of stock overlay (centered) */}
+          {outOfStock && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none">
+              <span className="bg-white/95 text-brand-ink text-[11px] sm:text-sm font-bold uppercase tracking-wide px-3 sm:px-4 py-1 sm:py-1.5 rounded-full shadow-md border border-brand-ink/10">
+                Out of Stock
+              </span>
+            </div>
+          )}
 
           {/* Badges */}
           <div className="absolute top-1.5 left-1.5 sm:top-2 sm:left-2 flex flex-col gap-1">
@@ -141,14 +157,16 @@ export default function ProductCard({ product }) {
       <div className="px-2 pb-2 pt-1.5 sm:px-2.5 sm:pb-2.5 sm:pt-2 flex gap-1 sm:gap-1.5">
         <button
           onClick={handleAddToCart}
-          className="flex-1 flex items-center justify-center gap-1 border border-brand-magenta text-brand-magenta text-[10px] sm:text-[11px] font-bold py-1.5 sm:py-2 rounded-lg sm:rounded-xl active:scale-95 transition-transform"
+          disabled={outOfStock}
+          className="flex-1 flex items-center justify-center gap-1 border border-brand-magenta text-brand-magenta text-[10px] sm:text-[11px] font-bold py-1.5 sm:py-2 rounded-lg sm:rounded-xl active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
         >
           <ShoppingBag className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
           <span className="truncate">{adding ? 'Added!' : <><span className="sm:hidden">Cart</span><span className="hidden sm:inline">Add to Cart</span></>}</span>
         </button>
         <button
           onClick={handleBuyNow}
-          className="flex-1 flex items-center justify-center gap-1 bg-brand-magenta text-white text-[10px] sm:text-[11px] font-bold py-1.5 sm:py-2 rounded-lg sm:rounded-xl shadow-sm active:scale-95 transition-transform"
+          disabled={outOfStock}
+          className="flex-1 flex items-center justify-center gap-1 bg-brand-magenta text-white text-[10px] sm:text-[11px] font-bold py-1.5 sm:py-2 rounded-lg sm:rounded-xl shadow-sm active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
         >
           <Zap className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" fill="white" />
           <span className="truncate">Buy Now</span>
