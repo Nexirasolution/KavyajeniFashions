@@ -8,11 +8,11 @@ function getFilter(id) {
   return mongoose.isValidObjectId(id) ? { _id: id } : { slug: id };
 }
 
-export async function GET(req, props) {
-  const params = await props.params;
+export async function GET(req, { params }) {
+  const { id } = await params;
   await dbConnect();
 
-  const category = await Category.findOne(getFilter(params.id)).populate('parent', 'name slug');
+  const category = await Category.findOne(getFilter(id)).populate('parent', 'name slug');
   if (!category) return NextResponse.json({ error: 'Category not found' }, { status: 404 });
 
   // Active subcategories, used by the storefront to decide: show subcategory grid or show sizes+products
@@ -25,6 +25,7 @@ export async function GET(req, props) {
 }
 
 export const PUT = requireAdmin(async (req, { params }) => {
+  const { id } = await params;
   await dbConnect();
   const body = await req.json();
 
@@ -36,7 +37,7 @@ export const PUT = requireAdmin(async (req, { params }) => {
       if (!mongoose.isValidObjectId(body.parent)) {
         return NextResponse.json({ error: 'Invalid parent category' }, { status: 400 });
       }
-      const current = await Category.findOne(getFilter(params.id));
+      const current = await Category.findOne(getFilter(id));
       if (current && String(current._id) === String(body.parent)) {
         return NextResponse.json({ error: 'A category cannot be its own parent' }, { status: 400 });
       }
@@ -45,15 +46,16 @@ export const PUT = requireAdmin(async (req, { params }) => {
     }
   }
 
-  const category = await Category.findOneAndUpdate(getFilter(params.id), body, { new: true });
+  const category = await Category.findOneAndUpdate(getFilter(id), body, { new: true });
   if (!category) return NextResponse.json({ error: 'Category not found' }, { status: 404 });
   return NextResponse.json({ category });
 });
 
 export const DELETE = requireAdmin(async (req, { params }) => {
+  const { id } = await params;
   await dbConnect();
 
-  const category = await Category.findOne(getFilter(params.id));
+  const category = await Category.findOne(getFilter(id));
   if (!category) return NextResponse.json({ error: 'Category not found' }, { status: 404 });
 
   const subCount = await Category.countDocuments({ parent: category._id });
