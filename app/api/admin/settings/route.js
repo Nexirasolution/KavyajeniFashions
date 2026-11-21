@@ -5,7 +5,7 @@ import { dbConnect } from '@/lib/mongodb';
 import Settings from '@/models/Settings';
 import { requireAdmin } from '@/lib/apiAuth';
 import { getShippingSettings } from '@/lib/shipping';
-import { sanitizeRule, sanitizeStateRules } from '@/lib/shippingConfig';
+import { sanitizeRule, sanitizeStateRules, DEFAULT_COURIERS } from '@/lib/shippingConfig';
 import { sanitizeDiscountRules } from '@/lib/discountConfig';
 
 export async function GET() {
@@ -29,6 +29,14 @@ export const PUT = requireAdmin(async (req) => {
   if (body.defaultRule) body.defaultRule = sanitizeRule(body.defaultRule);
   if (body.shippingRules) body.shippingRules = sanitizeStateRules(body.shippingRules);
   if (body.discountRules) body.discountRules = sanitizeDiscountRules(body.discountRules);
+
+  // Courier names shown at checkout. A blank value falls back to the default.
+  if ('onlineCourier' in body) {
+    body.onlineCourier = String(body.onlineCourier || '').trim().slice(0, 60) || DEFAULT_COURIERS.online;
+  }
+  if ('codCourier' in body) {
+    body.codCourier = String(body.codCourier || '').trim().slice(0, 60) || DEFAULT_COURIERS.cod;
+  }
 
   const settings = await Settings.findOneAndUpdate({ key: 'global' }, body, { new: true, upsert: true });
   return NextResponse.json({ settings });

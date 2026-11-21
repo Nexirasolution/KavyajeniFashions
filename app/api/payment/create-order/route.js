@@ -11,12 +11,15 @@ import {
   applyCouponToSubtotal
 } from '@/lib/orderCreation';
 import { releaseExpiredOrders } from '@/lib/releaseExpiredOrders';
-import { getShippingSettings, getCodStatus, orderItemsToLines } from '@/lib/shipping';
-import { resolveRule, computeShipping, INDIAN_STATES } from '@/lib/shippingConfig';
+import { getShippingSettings, buildShippingQuote, orderItemsToLines } from '@/lib/shipping';
+import { resolveRule, INDIAN_STATES } from '@/lib/shippingConfig';
 
-const RESERVATION_WINDOW_MS = 10 * 60 * 1000; // 10 min to complete payment, then stock is released
+const RESERVATION_WINDOW_MS = 10 * 60 * 1000; // 10 min to complete an ONLINE payment, then stock is released
 
 // ─────────────────────────── Address validation ───────────────────────────
+
+const NAME_RE = /^[A-Za-z][A-Za-z\s.'-]{1,}$/;
+const DISTRICT_RE = /^[A-Za-z][A-Za-z\s.'()&-]{1,}$/;
 
 const norm = (s = '') => String(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z]/g, '');
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
@@ -67,10 +70,11 @@ async function validateAndCleanAddress(customer, shippingAddress) {
   const line1 = str(a.line1);
   const line2 = str(a.line2);
   const city = str(a.city);
+  const district = str(a.district);
   const pincode = str(a.pincode);
   const landmark = str(a.landmark);
 
-  if (!/^[A-Za-z][A-Za-z\s.'-]{1,}$/.test(name)) {
+  if (!NAME_RE.test(name)) {
     return { error: 'Please enter your full name' };
   }
   if (!/^[6-9]\d{9}$/.test(phone)) {
@@ -82,8 +86,12 @@ async function validateAndCleanAddress(customer, shippingAddress) {
   if (line1.length < 5) {
     return { error: 'Please enter your house / street address' };
   }
-  if (!/^[A-Za-z][A-Za-z\s.'-]{1,}$/.test(city)) {
+  if (!NAME_RE.test(city)) {
     return { error: 'Please enter a valid city' };
+  }
+  // District is mandatory.
+  if (!DISTRICT_RE.test(district)) {
+    return { error: 'Please enter your district' };
   }
 
   // State must be one of the known states (canonical spelling is used).
@@ -105,7 +113,7 @@ async function validateAndCleanAddress(customer, shippingAddress) {
 
   return {
     customer: { name, phone, email },
-    address: { name, phone, email, line1, line2, city, state, pincode, landmark }
+    address: { name, phone, email, line1, line2, city, district, state, pincode, landmark }
   };
 }
 
@@ -130,9 +138,16 @@ export async function POST(req) {
     const customer = checked.customer;
     const shippingAddress = checked.address;
 
-    // Razorpay is needed for a plain online order AND for a COD order that
-    // carries a fee to be paid online — only a zero-fee COD order skips it.
-    const razorpay = getRazorpay();
+    // Razorpay is only needed for online orders. Cash on Delivery is NOT
+    // prepaid: nothing is charged online, items + shipping are all paid in
+    // cash when the parcel arrives.
+    const razorpay = method === 'razorpay' ? getRazorpay() : null;
+    if (method === 'razorpay' && !razorpay) {
+      return NextResponse.json(
+        { error: 'Payment gateway is not configured. Add RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET in .env' },
+        { status: 500 }
+      );
+    }
 
     const settings = await getShippingSettings();
     const rule = resolveRule(settings, shippingAddress.state);
@@ -143,7 +158,7 @@ export async function POST(req) {
     await releaseExpiredOrders().catch((e) => console.error('releaseExpiredOrders failed:', e));
 
     // Reserve stock atomically BEFORE the customer ever sees the payment
-    // modal (or, for a zero-fee COD order, before the order is created).
+    // modal (or, for a COD order, before the order is created).
     let reserved;
     try {
       reserved = await reserveItemsAndBuildOrder(items);
@@ -165,49 +180,36 @@ export async function POST(req) {
     };
 
     try {
-      // COD eligibility is checked against the items that were actually
-      // reserved (not the raw client payload), so it can't be bypassed by
-      // sending junk lines.
-      let codFee = 0;
-      if (method === 'cod') {
-        const cod = await getCodStatus(
-          rule,
-          orderItemsToLines(orderItems),
-          rule.matchedState || shippingAddress.state
-        );
-        if (!cod.available) {
-          await release();
-          return NextResponse.json({ error: cod.reason }, { status: 400 });
-        }
-        codFee = cod.fee;
-      }
-
-      // A Razorpay charge is needed for: any online order, or a COD order
-      // that has a fee to collect upfront. Only a zero-fee COD order needs
-      // no gateway at all.
-      const needsOnlineCharge = method === 'razorpay' || codFee > 0;
-      if (needsOnlineCharge && !razorpay) {
-        await release();
-        return NextResponse.json(
-          { error: 'Payment gateway is not configured. Add RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET in .env' },
-          { status: 500 }
-        );
-      }
-
       // Recompute discount + shipping server-side — never trust a client total.
       const couponResult = await applyCouponToSubtotal(couponCode, subtotal);
       const discount = couponResult.discount;
       appliedCoupon = couponResult.appliedCoupon;
+      const amountAfterDiscount = subtotal - discount;
 
-      const shippingFee = computeShipping(rule, subtotal - discount);
+      // Shipping + COD eligibility are worked out from the items that were
+      // actually reserved (not the raw client payload), so they can't be
+      // bypassed by sending junk lines.
+      const quote = await buildShippingQuote({
+        settings,
+        rule,
+        lines: orderItemsToLines(orderItems),
+        state: shippingAddress.state,
+        amountAfterDiscount
+      });
 
-      // Order total = items − discount + shipping. The COD charge is stored
-      // separately in `codFee` and is NOT part of the total.
+      if (method === 'cod' && !quote.cod.available) {
+        await release();
+        return NextResponse.json({ error: quote.cod.reason }, { status: 400 });
+      }
+
+      const shippingFee = method === 'cod' ? quote.cod.shippingFee : quote.online.shippingFee;
+      const deliveryPartner = method === 'cod' ? quote.cod.courier : quote.online.courier;
+
+      // Order total = items − discount + shipping.
       //   • Online order: the whole `total` is charged on Razorpay.
-      //   • COD order:    only `codFee` is charged on Razorpay now; the full
-      //                   `total` is collected in cash on delivery.
-      const total = Math.round(subtotal - discount + shippingFee);
-      const amountDueOnline = method === 'cod' ? Math.round(codFee) : total;
+      //   • COD order:    nothing is charged online; the whole `total`
+      //                   is collected in cash on delivery.
+      const total = Math.round(amountAfterDiscount + shippingFee);
 
       if (total <= 0) {
         await release();
@@ -223,39 +225,36 @@ export async function POST(req) {
         discount,
         couponCode: appliedCoupon,
         shippingFee,
-        codFee,
+        codFee: 0,
         total,
         paymentMethod: method,
-        // A zero-fee COD order is 'pending' (cash collected on delivery).
-        // A COD order WITH a fee is 'cod_fee_pending' until that fee clears
-        // Razorpay — verify() / the webhook move it to 'cod_fee_paid'.
-        paymentStatus: method === 'cod' ? (codFee > 0 ? 'cod_fee_pending' : 'pending') : 'pending',
+        paymentStatus: 'pending', // COD: cash due on delivery. Online: awaiting payment.
         status: 'placed',
+        deliveryPartner,
         stockReservations: decremented,
-        // Anything with money still outstanding online (a plain online order,
-        // or a COD order with a fee) expires after RESERVATION_WINDOW_MS if
-        // payment is abandoned — releaseExpiredOrders() then cancels it and
-        // restores the stock. Only a zero-fee COD order is exempt.
-        expiresAt: needsOnlineCharge ? new Date(Date.now() + RESERVATION_WINDOW_MS) : undefined
+        // Only an online order with payment still outstanding expires.
+        // COD orders have nothing to pay online, so they never expire.
+        expiresAt: method === 'razorpay' ? new Date(Date.now() + RESERVATION_WINDOW_MS) : undefined
       });
 
-      // ── Zero-fee Cash on Delivery: order is final, no payment gateway involved ──
-      if (method === 'cod' && codFee === 0) {
+      // ── Cash on Delivery: order is final, no payment gateway involved ──
+      if (method === 'cod') {
         return NextResponse.json({
           cod: true,
           dbOrderId: dbOrder._id,
           orderNumber: dbOrder.orderNumber,
           total,
-          codFee: 0,
+          shippingFee,
+          deliveryPartner,
           cashDue: total
         });
       }
 
-      // ── Online charge: either a full online payment, or just the COD fee ──
+      // ── Online payment: charge the full total on Razorpay ──
       let rzpOrder;
       try {
         rzpOrder = await razorpay.orders.create({
-          amount: amountDueOnline * 100, // paise
+          amount: total * 100, // paise
           currency: 'INR',
           receipt: dbOrder.orderNumber
         });
@@ -272,10 +271,9 @@ export async function POST(req) {
         order: rzpOrder,
         keyId: process.env.RAZORPAY_KEY_ID,
         dbOrderId: dbOrder._id,
-        cod: method === 'cod', // tells the client this Razorpay charge is the COD fee, not the full total
         total,
-        codFee,
-        cashDue: method === 'cod' ? total : 0
+        shippingFee,
+        deliveryPartner
       });
     } catch (err) {
       // Anything unexpected after stock was reserved: give it back, then let

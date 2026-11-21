@@ -8,8 +8,8 @@ import Script from 'next/script';
 import toast from 'react-hot-toast';
 import { useCart } from '@/components/CartContext';
 import { formatINR } from '@/lib/utils';
-import { INDIAN_STATES } from '@/lib/shippingConfig';
-import { AlertTriangle } from 'lucide-react';
+import { INDIAN_STATES, DEFAULT_COURIERS } from '@/lib/shippingConfig';
+import { AlertTriangle, Truck } from 'lucide-react';
 
 // Razorpay popup closes itself after this many seconds. Kept a little under
 // the server's 10-minute reservation window so a customer can't be mid-payment
@@ -19,6 +19,7 @@ const PAYMENT_TIMEOUT_SECONDS = 540;
 // ─────────────────────────── Address validation helpers ───────────────────────────
 
 const NAME_RE = /^[A-Za-z][A-Za-z\s.'-]{1,}$/;
+const DISTRICT_RE = /^[A-Za-z][A-Za-z\s.'()&-]{1,}$/;
 const PIN_RE = /^[1-9]\d{5}$/;
 
 // Lowercase letters only, so "Jammu & Kashmir" matches "Jammu and Kashmir".
@@ -44,6 +45,7 @@ function validateAddress(f, pinInfo) {
   }
   if (f.line1.trim().length < 5) e.line1 = 'Enter your house / street address';
   if (!NAME_RE.test(f.city.trim())) e.city = 'Enter a valid city';
+  if (!DISTRICT_RE.test(f.district.trim())) e.district = 'Enter your district';
   if (!INDIAN_STATES.includes(f.state)) e.state = 'Select your state';
 
   if (!PIN_RE.test(f.pincode)) {
@@ -73,6 +75,8 @@ function Field({ error, className = '', ...props }) {
   );
 }
 
+const shipLabel = (fee) => (fee === 0 ? 'Free shipping' : `Shipping ${formatINR(fee)}`);
+
 // ─────────────────────────────────── Page ───────────────────────────────────
 
 export default function CheckoutPage() {
@@ -80,7 +84,7 @@ export default function CheckoutPage() {
   const router = useRouter();
   const [form, setForm] = useState({
     name: '', phone: '', email: '',
-    line1: '', line2: '', city: '', state: '', pincode: '', landmark: ''
+    line1: '', line2: '', city: '', district: '', state: '', pincode: '', landmark: ''
   });
   const [coupon, setCoupon] = useState('');
   const [discount, setDiscount] = useState(0);
@@ -93,7 +97,11 @@ export default function CheckoutPage() {
   const [paymentMethod, setPaymentMethod] = useState('online');
 
   // Shipping + COD quote for the selected state, from /api/shipping/quote.
-  // Shape: { shippingFee, freeShippingAbove, cod: { available, fee, reason }, forState }
+  // Shape: {
+  //   forState, quantity, freeShippingAbove,
+  //   online: { shippingFee, courier },
+  //   cod:    { available, reason, shippingFee, courier }
+  // }
   const [quote, setQuote] = useState(null);
   const [shippingLoading, setShippingLoading] = useState(false);
 
@@ -125,17 +133,27 @@ export default function CheckoutPage() {
 
   // Ignore a quote that belongs to a previously selected state.
   const activeQuote = quote && quote.forState === form.state ? quote : null;
-  const shipping = activeQuote ? activeQuote.shippingFee : null;
-  const freeShippingAbove = activeQuote ? activeQuote.freeShippingAbove : 0;
-  const cod = activeQuote ? activeQuote.cod : null;
+  const onlineQuote = activeQuote?.online || null;
+  const cod = activeQuote?.cod || null;
   const codAvailable = !!cod?.available;
-  const codFee = paymentMethod === 'cod' && codAvailable ? cod.fee : 0;
+  const freeShippingAbove = activeQuote ? activeQuote.freeShippingAbove : 0;
 
-  // Order total = items − discount + shipping. The COD charge is NOT part of
-  // it: it's a separate handling fee paid online right now.
+  // The method that will really be used (COD silently falls back to online
+  // when it isn't available for this state / cart).
+  const isCod = paymentMethod === 'cod' && codAvailable;
+
+  // Shipping depends on the number of nighties AND the payment method.
+  const shipping = activeQuote ? (isCod ? cod.shippingFee : onlineQuote.shippingFee) : null;
+
+  // Courier shown under the payment methods.
+  const courier = activeQuote
+    ? (isCod ? cod.courier : onlineQuote.courier)
+    : (paymentMethod === 'cod' ? DEFAULT_COURIERS.cod : DEFAULT_COURIERS.online);
+
+  // Order total = items − discount + shipping.
+  // Online: the whole total is paid now. COD: nothing is paid online — the
+  // whole total (items + shipping) is paid in cash on delivery.
   const total = shipping !== null ? Math.round(discountedSubtotal + shipping) : null;
-  // For a COD order this whole total is collected in cash at the doorstep.
-  const codCashDue = total;
 
   // Stable string so the quote effect doesn't re-run on every render.
   const itemsKey = JSON.stringify(
@@ -145,9 +163,9 @@ export default function CheckoutPage() {
     }))
   );
 
-  // Verify the pincode with India Post and auto-fill the state if it's empty.
-  // If the lookup service is down we fail open (status 'unknown') so a
-  // third-party outage never blocks real customers.
+  // Verify the pincode with India Post, and auto-fill the state / district if
+  // they are empty. If the lookup service is down we fail open (status
+  // 'unknown') so a third-party outage never blocks real customers.
   useEffect(() => {
     const pin = form.pincode;
     if (!PIN_RE.test(pin)) {
@@ -164,9 +182,14 @@ export default function CheckoutPage() {
         const po = data?.[0]?.PostOffice;
         if (data?.[0]?.Status === 'Success' && po?.length) {
           const st = po[0].State;
+          const dist = po[0].District || '';
           setPinInfo({ pin, status: 'valid', state: st });
           const match = INDIAN_STATES.find((s) => norm(s) === norm(st));
-          if (match) setForm((f) => (f.state ? f : { ...f, state: match }));
+          setForm((f) => ({
+            ...f,
+            state: f.state || (match ?? ''),
+            district: f.district || dist
+          }));
         } else if (data?.[0]?.Status === 'Error') {
           setPinInfo({ pin, status: 'invalid', state: '' });
         } else {
@@ -362,6 +385,7 @@ export default function CheckoutPage() {
       line1: form.line1.trim(),
       line2: form.line2.trim(),
       city: form.city.trim(),
+      district: form.district.trim(),
       landmark: form.landmark.trim()
     };
 
@@ -374,7 +398,7 @@ export default function CheckoutPage() {
           customer: { name: cleanedForm.name, phone: cleanedPhone, email: cleanedForm.email },
           shippingAddress: cleanedForm,
           couponCode: coupon,
-          paymentMethod
+          paymentMethod: isCod ? 'cod' : 'online'
         })
       });
       const orderData = await orderRes.json();
@@ -389,22 +413,17 @@ export default function CheckoutPage() {
         return;
       }
 
-      // Pure Cash on Delivery — no online charge at all (e.g. COD fee is 0
-      // for this state/order). Order is placed directly, nothing to pay now.
-      // The backend should only return this shape when there's no fee to collect.
-      if (orderData.cod && !orderData.order) {
+      // Cash on Delivery — nothing is paid online. The order is placed
+      // straight away and the full amount is collected at the doorstep.
+      if (orderData.cod) {
         clearCart();
         router.push(`/order-success/${orderData.dbOrderId}`);
         setSubmitting(false);
         return;
       }
 
-      // Either a full online payment, or a COD order that still has a COD
-      // handling fee to collect online. In both cases the backend returns a
-      // Razorpay order — for COD, `rzpOrder.amount` should be just the fee,
-      // not the full order total. `orderData.cod` tells us which case we're in.
+      // Online payment — open Razorpay for the full order total.
       const { order: rzpOrder, keyId, dbOrderId } = orderData;
-      const isCodFeePayment = !!orderData.cod;
 
       const rzp = new window.Razorpay({
         key: keyId,
@@ -412,9 +431,6 @@ export default function CheckoutPage() {
         currency: 'INR',
         name: 'Kavyajeni Nighties',
         order_id: rzpOrder.id,
-        description: isCodFeePayment
-          ? `COD handling charge — ${formatINR(codCashDue)} balance due in cash on delivery`
-          : undefined,
         prefill: { name: cleanedForm.name, contact: cleanedPhone, email: cleanedForm.email },
         theme: { color: '#C2185B' },
         // Auto-close the popup before the server expires the unpaid order.
@@ -477,10 +493,8 @@ export default function CheckoutPage() {
           : shippingLoading
             ? 'Calculating shipping…'
             : total !== null
-              ? paymentMethod === 'cod'
-                ? codFee > 0
-                  ? `Pay ${formatINR(codFee)} COD charge online`
-                  : `Place COD Order · ${formatINR(total)}`
+              ? isCod
+                ? `Place COD Order · ${formatINR(total)}`
                 : `Pay ${formatINR(total)}`
               : 'Proceed to Pay';
 
@@ -523,10 +537,10 @@ export default function CheckoutPage() {
         </div>
       )}
 
-      {/* Free shipping nudge (only for states that have a free-shipping threshold) */}
-      {freeShippingAbove > 0 && shipping !== null && shipping > 0 && !hasStockIssues && (
+      {/* Free shipping nudge (online orders only, and only for states that have a free-shipping threshold) */}
+      {!isCod && freeShippingAbove > 0 && shipping !== null && shipping > 0 && !hasStockIssues && (
         <p className="text-xs text-brand-ink/60 bg-brand-magenta/5 border border-brand-magenta/15 rounded-lg px-3 py-2 mb-4">
-          Add {formatINR(freeShippingAbove - discountedSubtotal)} more to get <span className="font-semibold text-brand-green">free shipping</span>!
+          Add {formatINR(freeShippingAbove - discountedSubtotal)} more to get <span className="font-semibold text-brand-green">free shipping</span> on online payment!
         </p>
       )}
 
@@ -586,6 +600,7 @@ export default function CheckoutPage() {
             onChange={(e) => update('line2', e.target.value)}
           />
 
+          {/* City + District */}
           <div className="grid grid-cols-2 gap-3">
             <div data-field="city">
               <Field
@@ -597,6 +612,19 @@ export default function CheckoutPage() {
                 error={err('city')}
               />
             </div>
+            <div data-field="district">
+              <Field
+                placeholder="District *"
+                value={form.district}
+                onChange={(e) => update('district', e.target.value)}
+                onBlur={blur('district')}
+                error={err('district')}
+              />
+            </div>
+          </div>
+
+          {/* State + Pincode */}
+          <div className="grid grid-cols-2 gap-3">
             {/* Dropdown (not free text) so the state always matches an admin rule exactly */}
             <div data-field="state">
               <select
@@ -616,9 +644,6 @@ export default function CheckoutPage() {
               </select>
               {err('state') && <p className="text-xs text-red-600 mt-1">{errors.state}</p>}
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
             <div data-field="pincode">
               <Field
                 placeholder="Pincode *"
@@ -635,12 +660,13 @@ export default function CheckoutPage() {
                 <p className="text-xs text-brand-green mt-1">✓ {pinInfo.state}</p>
               )}
             </div>
-            <Field
-              placeholder="Landmark (optional)"
-              value={form.landmark}
-              onChange={(e) => update('landmark', e.target.value)}
-            />
           </div>
+
+          <Field
+            placeholder="Landmark (optional)"
+            value={form.landmark}
+            onChange={(e) => update('landmark', e.target.value)}
+          />
         </div>
 
         {/* ── Right column ── */}
@@ -759,15 +785,15 @@ export default function CheckoutPage() {
               </span>
             </div>
 
-            {paymentMethod === 'cod' && codFee > 0 && codCashDue !== null && (
+            {isCod && total !== null && (
               <div className="mt-3 rounded-lg border border-brand-magenta/15 bg-brand-magenta/5 px-3 py-2.5 text-sm space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-brand-ink/70">Pay now online (COD charge)</span>
-                  <span className="font-medium">{formatINR(codFee)}</span>
+                  <span className="text-brand-ink/70">Pay now online</span>
+                  <span className="font-medium">{formatINR(0)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-brand-ink/70">Pay in cash on delivery</span>
-                  <span className="font-medium">{formatINR(codCashDue)}</span>
+                  <span className="font-medium">{formatINR(total)}</span>
                 </div>
               </div>
             )}
@@ -777,31 +803,42 @@ export default function CheckoutPage() {
           <div className="card-soft p-4 sm:p-5">
             <h2 className="font-semibold text-brand-ink mb-2 text-sm sm:text-base">Payment Method</h2>
             <div className="space-y-2">
-              <label className="flex items-center gap-2 text-sm text-brand-ink/80 cursor-pointer">
+              <label className="flex items-start gap-2 text-sm text-brand-ink/80 cursor-pointer">
                 <input
                   type="radio"
                   name="paymentMethod"
+                  className="mt-1"
                   checked={paymentMethod === 'online'}
                   onChange={() => setPaymentMethod('online')}
                 />
-                <span>Pay Online (Cards / UPI / Netbanking)</span>
+                <span>
+                  Pay Online (Cards / UPI / Netbanking)
+                  {onlineQuote && (
+                    <span className="block text-xs text-brand-ink/50">{shipLabel(onlineQuote.shippingFee)}</span>
+                  )}
+                </span>
               </label>
 
               <label
-                className={`flex items-center gap-2 text-sm ${
+                className={`flex items-start gap-2 text-sm ${
                   codAvailable ? 'text-brand-ink/80 cursor-pointer' : 'text-brand-ink/40 cursor-not-allowed'
                 }`}
               >
                 <input
                   type="radio"
                   name="paymentMethod"
+                  className="mt-1"
                   disabled={!codAvailable}
                   checked={paymentMethod === 'cod'}
                   onChange={() => setPaymentMethod('cod')}
                 />
                 <span>
                   Cash on Delivery
-                  {codAvailable && cod.fee > 0 ? ` (+${formatINR(cod.fee)} COD charge, paid online)` : ''}
+                  {codAvailable && (
+                    <span className="block text-xs text-brand-ink/50">
+                      {shipLabel(cod.shippingFee)} · no advance payment
+                    </span>
+                  )}
                 </span>
               </label>
 
@@ -813,6 +850,14 @@ export default function CheckoutPage() {
               {activeQuote && !codAvailable && cod?.reason && (
                 <p className="text-xs text-brand-ink/60">{cod.reason}</p>
               )}
+            </div>
+
+            {/* Delivery partner for the selected payment method */}
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-brand-magenta/15 bg-brand-magenta/5 px-3 py-2.5 text-sm text-brand-ink/80">
+              <Truck size={16} className="shrink-0 text-brand-magenta" />
+              <span>
+                Delivery by <span className="font-semibold text-brand-ink">{courier}</span>
+              </span>
             </div>
           </div>
 

@@ -12,6 +12,12 @@ const positive = (v) => {
 // Public and read-only: returns ONLY the free shipping amount for the
 // storefront marquee (no fees, COD rules or other settings).
 //
+// Free shipping now applies to ONLINE-payment orders only (Cash on Delivery
+// always uses its own quantity-based shipping charge), so the response
+// includes `onlineOnly: true`. The marquee can use it to say
+// "Free shipping on online payment above ₹X". Existing code that only reads
+// minOrderValue / state keeps working unchanged.
+//
 // 1) Uses the default rule (every state without its own rule).
 // 2) If the default is 0 ("never free"), falls back to the lowest
 //    state-specific threshold and returns that state's name.
@@ -22,7 +28,9 @@ export async function GET() {
 
     const base = positive(settings.defaultRule?.freeShippingAbove);
     if (base) {
-      return NextResponse.json({ freeShipping: { minOrderValue: base, state: null } });
+      return NextResponse.json({
+        freeShipping: { minOrderValue: base, state: null, onlineOnly: true }
+      });
     }
 
     const lowest = (settings.shippingRules || [])
@@ -31,7 +39,9 @@ export async function GET() {
       .sort((a, b) => a.min - b.min)[0];
 
     return NextResponse.json({
-      freeShipping: lowest ? { minOrderValue: lowest.min, state: lowest.state } : null
+      freeShipping: lowest
+        ? { minOrderValue: lowest.min, state: lowest.state, onlineOnly: true }
+        : null
     });
   } catch (err) {
     console.error('Free shipping lookup error:', err);

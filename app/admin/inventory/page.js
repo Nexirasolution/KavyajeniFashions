@@ -156,9 +156,9 @@ async function callBulk(payload) {
 // the products' images so they can be handed to the native share sheet alongside
 // the text. Price is never referenced anywhere here.
 
-// Chrome/Android refuses to share more than 10 files in one share call.
-// (navigator.canShare returns false, which used to silently drop ALL images.)
-const MAX_SHARE_FILES = 10;
+// Chrome/Android refuses to share more than 10 files in one share call
+// (navigator.canShare returns false). So everything is shared in batches of 10.
+const BATCH_SIZE = 10;
 
 const EXT_TO_TYPE = {
   jpg: 'image/jpeg',
@@ -187,10 +187,12 @@ function slugify(name, i) {
   return `${base || 'product'}-${i + 1}`;
 }
 
-function buildDefaultShareMessage(products) {
-  const lines = ['✨ Check these out! ✨', ''];
-  products.forEach((p, i) => {
-    lines.push(`${i + 1}. ${p.name}`);
+// Message for one batch. `startIndex` keeps the numbering continuous across
+// batches (1-10, 11-20, ...). Only the first batch gets the header line.
+function buildShareMessage(items, startIndex = 0, withHeader = true) {
+  const lines = withHeader ? ['✨ Check these out! ✨', ''] : [];
+  items.forEach((p, i) => {
+    lines.push(`${startIndex + i + 1}. ${p.name}`);
     if (p.description && String(p.description).trim()) lines.push(String(p.description).trim());
     lines.push('');
   });
@@ -247,12 +249,23 @@ async function fetchImageFile(p, i) {
   }
 }
 
-// Fetches all images in parallel (much faster than one after another).
-// Images that fail (e.g. a host without permissive CORS headers) are skipped
-// rather than blocking the whole share.
-async function collectShareImageFiles(products) {
-  const results = await Promise.all(products.map((p, i) => fetchImageFile(p, i)));
-  return results.filter(Boolean);
+// Loads EVERY product's image, a few at a time (6 workers), and keeps the
+// results in the same order as `products`. Images that fail (e.g. a host
+// without permissive CORS headers) stay `null` instead of blocking the share.
+async function collectShareImageFiles(products, onProgress) {
+  const results = new Array(products.length).fill(null);
+  let next = 0;
+  let done = 0;
+  const worker = async () => {
+    while (next < products.length) {
+      const i = next++;
+      results[i] = await fetchImageFile(products[i], i);
+      done += 1;
+      onProgress?.(done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, products.length) }, worker));
+  return results;
 }
 
 // Downloads each product's thumbnail to the admin's device, for manual attaching
@@ -1712,19 +1725,38 @@ function BulkDeleteModal({ products, busy, onClose, onConfirm }) {
   );
 }
 
-// Shares the selected products (image + name + description, NEVER price) as one
-// combined message. Prefers the native share sheet (images + text together, with
-// WhatsApp selectable as the target); falls back to a text-only WhatsApp link plus
-// a manual "Download images" option when the share sheet or image fetch isn't
-// available.
+// Shares the selected products (image + name + description, NEVER price).
 //
-// The images are prepared as soon as the modal opens, so the Share button can
-// call navigator.share() straight away. Browsers only allow it shortly after a
-// tap; downloading images after the tap made it fail and fall back to text only.
+// Chrome/Android allows at most 10 files per share call, so the selection is
+// split into batches of BATCH_SIZE. Each tap on the main button opens the native
+// share sheet for one batch (images + that batch's message), then the modal moves
+// on to the next batch. Every batch has its own editable message, numbered
+// continuously across batches.
+//
+// ALL images are prepared as soon as the modal opens, so each Share tap can call
+// navigator.share() straight away. Browsers only allow it shortly after a tap;
+// downloading images after the tap made it fail and fall back to text only.
+//
+// Fallback (no native share / unreliable in-app browser): a text-only WhatsApp
+// link plus a manual "Download all images" option.
 function ShareModal({ products, onClose }) {
-  const [message, setMessage] = useState(() => buildDefaultShareMessage(products));
-  const [files, setFiles] = useState([]);
-  const hasImages = products.some((p) => getThumb(p));
+  const batches = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < products.length; i += BATCH_SIZE) {
+      out.push({ start: i, items: products.slice(i, i + BATCH_SIZE) });
+    }
+    return out;
+  }, [products]);
+
+  // One editable message per batch
+  const [messages, setMessages] = useState(() =>
+    batches.map((b) => buildShareMessage(b.items, b.start, b.start === 0))
+  );
+  const [current, setCurrent] = useState(0);
+  const [fileMap, setFileMap] = useState([]); // aligned with `products`, null = failed
+  const [progress, setProgress] = useState(0);
+  const withImages = products.filter((p) => getThumb(p)).length;
+  const hasImages = withImages > 0;
   const [loadingImages, setLoadingImages] = useState(hasImages);
   const [downloading, setDownloading] = useState(false);
 
@@ -1736,17 +1768,20 @@ function ShareModal({ products, onClose }) {
     typeof navigator !== 'undefined' && !!navigator.share && !isUnreliableShareEnv();
   const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
 
-  // Only the first MAX_SHARE_FILES products can have their image attached.
-  const imageProducts = products.slice(0, MAX_SHARE_FILES);
-  const overLimit = products.length > MAX_SHARE_FILES;
+  const batch = batches[current];
+  const isLast = current === batches.length - 1;
+  const multi = batches.length > 1;
+  const batchFiles = fileMap.slice(batch.start, batch.start + BATCH_SIZE).filter(Boolean);
+  const message = messages[current];
+  const rangeLabel = `${batch.start + 1}–${batch.start + batch.items.length}`;
 
-  // Prepare the images once, as soon as the modal opens.
+  // Prepare ALL images once, as soon as the modal opens.
   useEffect(() => {
     if (!hasImages) return undefined;
     let cancelled = false;
-    collectShareImageFiles(imageProducts).then((f) => {
+    collectShareImageFiles(products, (n) => !cancelled && setProgress(n)).then((f) => {
       if (cancelled) return;
-      setFiles(f);
+      setFileMap(f);
       setLoadingImages(false);
     });
     return () => {
@@ -1755,16 +1790,26 @@ function ShareModal({ products, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function afterShared() {
+    if (isLast) {
+      onClose();
+    } else {
+      setCurrent((c) => c + 1);
+      toast.success(`Batch ${current + 1} of ${batches.length} shared. Now share the next one.`);
+    }
+  }
+
   async function handleShareClick() {
     if (nativeShareSupported) {
       // Only skip the files when canShare EXISTS and says no.
       const canAttach =
-        files.length > 0 && (typeof navigator.canShare !== 'function' || navigator.canShare({ files }));
+        batchFiles.length > 0 &&
+        (typeof navigator.canShare !== 'function' || navigator.canShare({ files: batchFiles }));
 
       // No awaits before this point, so the tap permission is still valid.
       try {
-        await navigator.share(canAttach ? { text: message, files } : { text: message });
-        onClose();
+        await navigator.share(canAttach ? { text: message, files: batchFiles } : { text: message });
+        afterShared();
         return;
       } catch (err) {
         if (err?.name === 'AbortError') return; // admin closed the share sheet
@@ -1772,7 +1817,7 @@ function ShareModal({ products, onClose }) {
           // Files were refused at share time: retry with text only
           try {
             await navigator.share({ text: message });
-            onClose();
+            afterShared();
             return;
           } catch (err2) {
             if (err2?.name === 'AbortError') return;
@@ -1784,7 +1829,7 @@ function ShareModal({ products, onClose }) {
     // Fallback: WhatsApp's link can only carry text, never images.
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
     if (hasImages) {
-      toast('WhatsApp links can\'t carry images. Use "Download images" and attach them manually.', {
+      toast('WhatsApp links can\'t carry images. Use "Download all images" and attach them manually.', {
         duration: 6000,
       });
     }
@@ -1793,7 +1838,7 @@ function ShareModal({ products, onClose }) {
   async function handleDownloadClick() {
     setDownloading(true);
     try {
-      await downloadProductImages(products);
+      await downloadProductImages(products); // downloads ALL selected products
     } finally {
       setDownloading(false);
     }
@@ -1801,6 +1846,12 @@ function ShareModal({ products, onClose }) {
 
   const busy = downloading;
   const shareDisabled = busy || loadingImages;
+
+  const shareLabel = loadingImages
+    ? `Preparing images… ${progress}/${products.length}`
+    : multi
+      ? `Share batch ${current + 1} of ${batches.length}`
+      : 'Share via WhatsApp';
 
   return (
     <Modal
@@ -1826,7 +1877,7 @@ function ShareModal({ products, onClose }) {
               className={`inline-flex items-center gap-2 rounded-lg border border-brand-ink/10 px-3 py-2.5 text-sm font-medium text-brand-ink/70 hover:border-brand-magenta/40 hover:text-brand-magenta disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
             >
               {downloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
-              Download images
+              Download all images
             </button>
           )}
           <button
@@ -1836,22 +1887,30 @@ function ShareModal({ products, onClose }) {
             className={`inline-flex items-center gap-2 rounded-lg bg-brand-magenta px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 sm:py-2 ${FOOTER_BTN}`}
           >
             {loadingImages ? <Loader2 size={15} className="animate-spin" /> : <Share2 size={15} />}
-            {loadingImages ? 'Preparing images…' : 'Share via WhatsApp'}
+            {shareLabel}
           </button>
         </>
       }
     >
       <p className="mb-3 text-sm text-brand-ink/60">
         {nativeShareSupported
-          ? 'Opens your share sheet with the images and message below. Pick WhatsApp there. Price is never included.'
+          ? multi
+            ? `Phones allow 10 images per share, so your ${products.length} products are sent in ${batches.length} batches. Tap the button, pick WhatsApp, then tap again for the next batch. Price is never included.`
+            : 'Opens your share sheet with the images and message below. Pick WhatsApp there. Price is never included.'
           : insecure
-            ? 'Image sharing needs a secure (https) page. On http, WhatsApp opens with text only. Use "Download images" and attach them yourself.'
+            ? 'Image sharing needs a secure (https) page. On http, WhatsApp opens with text only. Use "Download all images" and attach them yourself.'
             : "This browser can't attach images to WhatsApp automatically. WhatsApp opens with the message below. Download the images and attach them yourself."}
       </p>
 
+      {multi && (
+        <p className="mb-3 text-sm font-semibold text-brand-magenta">
+          Batch {current + 1} of {batches.length}: products {rangeLabel}
+        </p>
+      )}
+
       {hasImages && (
         <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-          {imageProducts.map((p) => (
+          {batch.items.map((p) => (
             <div key={p._id} className="flex w-16 shrink-0 flex-col items-center gap-1 sm:w-20">
               <Thumb product={p} />
               <p className="w-full truncate text-center text-[11px] text-brand-ink/60">{p.name}</p>
@@ -1863,31 +1922,26 @@ function ShareModal({ products, onClose }) {
       {hasImages && !loadingImages && nativeShareSupported && (
         <p
           className={`mb-3 text-xs font-medium ${
-            files.length === imageProducts.length ? 'text-emerald-700' : 'text-amber-700'
+            batchFiles.length === batch.items.length ? 'text-emerald-700' : 'text-amber-700'
           }`}
         >
-          {files.length} of {imageProducts.length} {plural(imageProducts.length, 'image')} ready to attach
-          {files.length < imageProducts.length &&
-            '. The rest could not be loaded (the image host may block downloads from this site). Use "Download images" for those.'}
-        </p>
-      )}
-
-      {overLimit && (
-        <p className="mb-3 rounded-lg bg-brand-cream px-3 py-2 text-xs text-brand-ink/70">
-          Phones allow at most {MAX_SHARE_FILES} images per share, so only the first {MAX_SHARE_FILES} will be
-          attached. Select {MAX_SHARE_FILES} or fewer products to share all their images, or use "Download images".
+          {batchFiles.length} of {batch.items.length} {plural(batch.items.length, 'image')} ready to attach
+          {batchFiles.length < batch.items.length &&
+            '. The rest could not be loaded (the image host may block downloads from this site). Use "Download all images" for those.'}
         </p>
       )}
 
       <label htmlFor="share-message" className="mb-1 block text-sm font-medium">
-        Message
+        Message{multi ? ` for batch ${current + 1}` : ''}
       </label>
       {/* text-base on phones stops iOS Safari from zooming in when the field is tapped */}
       <textarea
         id="share-message"
         rows={5}
         value={message}
-        onChange={(e) => setMessage(e.target.value)}
+        onChange={(e) =>
+          setMessages((prev) => prev.map((m, i) => (i === current ? e.target.value : m)))
+        }
         className="max-h-48 w-full resize-y rounded-lg border border-brand-ink/10 px-3 py-2 text-base focus:border-brand-magenta focus:outline-none focus:ring-2 focus:ring-brand-magenta/20 sm:text-sm"
       />
       <p className="mt-1 text-xs text-brand-ink/50">

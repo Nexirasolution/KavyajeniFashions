@@ -38,6 +38,7 @@ const OrderSchema = new mongoose.Schema(
       line1: String,
       line2: String,
       city: String,
+      district: String,
       state: String,
       pincode: String,
       landmark: String
@@ -45,17 +46,19 @@ const OrderSchema = new mongoose.Schema(
     subtotal: Number,
     discount: { type: Number, default: 0 },
     couponCode: { type: String, default: '' },
+    // Shipping charge worked out from the number of nighties (and the
+    // payment method: online and COD can have different charges).
     shippingFee: { type: Number, default: 0 },
-    // Extra charge added for Cash on Delivery orders (0 for online orders).
+    // LEGACY: older COD orders prepaid a "COD handling fee" online. New COD
+    // orders are never prepaid, so this stays 0 for them.
     codFee: { type: Number, default: 0 },
     total: Number,
-    // 'razorpay' = paid online, 'cod' = Cash on Delivery.
+    // 'razorpay' = paid online, 'cod' = Cash on Delivery (all cash on delivery).
     paymentMethod: { type: String, enum: ['razorpay', 'cod'], default: 'razorpay' },
-    // 'pending' = zero-fee COD order, or a plain online order awaiting payment.
-    // 'cod_fee_pending' = COD order created, waiting on its handling-fee charge.
-    // 'cod_fee_paid' = COD order's fee is settled online; the rest is cash on
-    //   delivery — set to 'paid' from the admin panel once that cash is collected.
-    // 'paid' = a plain online order, fully settled.
+    // 'pending' = COD order (cash due on delivery), or an online order awaiting payment.
+    // 'paid' = online order settled, or COD cash collected (set from the admin panel).
+    // 'cod_fee_pending' / 'cod_fee_paid' are kept only for COD orders placed
+    //   before COD became fully pay-on-delivery.
     paymentStatus: {
       type: String,
       enum: ['pending', 'cod_fee_pending', 'cod_fee_paid', 'paid', 'failed', 'refunded'],
@@ -68,18 +71,19 @@ const OrderSchema = new mongoose.Schema(
       enum: ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled', 'returned'],
       default: 'placed'
     },
+    // Courier chosen at checkout: online -> e.g. "ST Courier",
+    // COD -> e.g. "Postal Courier" (names come from the admin settings).
+    deliveryPartner: { type: String, default: '' },
     courier: {
       partner: { type: String, default: '' },
       trackingId: { type: String, default: '' },
       awbNumber: { type: String, default: '' }
     },
     notes: { type: String, default: '' },
-    // Set on creation to a short window (~15 min) for any order with money
-    // still outstanding online — a plain online order, or a COD order with a
-    // fee still due ('pending' or 'cod_fee_pending'). The cron sweep cancels
-    // and releases stock for any such order still unpaid past this time.
-    // A zero-fee COD order never gets an expiresAt, so the sweep can't touch
-    // it. Cleared once paymentStatus reaches a settled state.
+    // Set on creation to a short window for an online order that is still
+    // awaiting payment. The cron sweep cancels and releases stock for any
+    // such order still unpaid past this time. COD orders never get an
+    // expiresAt (nothing is paid online), so the sweep can't touch them.
     expiresAt: { type: Date, default: null },
     // Exact stock deltas reserved for this order, kept separately from
     // `items` so a webhook or cron job — running long after the original
@@ -92,8 +96,8 @@ const OrderSchema = new mongoose.Schema(
 OrderSchema.index({ razorpayOrderId: 1 }, { unique: true, sparse: true });
 OrderSchema.index({ paymentMethod: 1, paymentStatus: 1, expiresAt: 1 });
 
-// In development, drop the cached model so schema edits (like adding 'cod')
-// take effect after a hot reload instead of needing a full server restart.
+// In development, drop the cached model so schema edits take effect after a
+// hot reload instead of needing a full server restart.
 if (process.env.NODE_ENV !== 'production' && mongoose.models.Order) {
   delete mongoose.models.Order;
 }

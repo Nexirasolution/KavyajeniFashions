@@ -1,17 +1,40 @@
 import mongoose from 'mongoose';
 
+// One "quantity -> shipping fee" row, e.g. { qty: 2, fee: 80 }.
+const TierSchema = new mongoose.Schema(
+  {
+    qty: { type: Number, required: true, min: 1 },
+    fee: { type: Number, required: true, min: 0 }
+  },
+  { _id: false }
+);
+
 // Fields shared by the "other states" default rule and every state-specific rule.
 // Function so each schema gets its own fresh definition object.
 const ruleFields = () => ({
-  shippingFee: { type: Number, default: 49, min: 0 },
-  freeShippingAbove: { type: Number, default: 0, min: 0 }, // 0 = never free
+  // Products that count towards the quantity, e.g. "nighty, nighties".
+  productKeywords: { type: String, default: '' },
+
+  // Online payment
+  shippingFee: { type: Number, default: 49, min: 0 },       // used when no row matches
+  freeShippingAbove: { type: Number, default: 0, min: 0 },  // 0 = never free
+  onlineShippingTiers: { type: [TierSchema], default: [] },
+
+  // Cash on Delivery (never prepaid — everything is paid in cash on delivery)
   codMode: { type: String, enum: ['disabled', 'enabled', 'conditional'], default: 'disabled' },
+  codShippingFee: { type: Number, default: 49, min: 0 },    // used when no row matches
+  codShippingTiers: { type: [TierSchema], default: [] },
+  // codMode === 'conditional': COD only when the number of matching items is
+  // between codMinQty and codMaxQty (0 = no limit on that side).
+  codMinQty: { type: Number, default: 0, min: 0 },
+  codMaxQty: { type: Number, default: 0, min: 0 },
+  codCartOnlyMatching: { type: Boolean, default: false },
+
+  // LEGACY — only read once to upgrade old documents (see migrateRule in
+  // lib/shippingConfig.js). They are dropped the next time settings are saved.
   codFee: { type: Number, default: 0, min: 0 },
-  // codMode === 'conditional': cart must have EXACTLY codExactQty items whose
-  // name/category matches one of these comma-separated keywords.
   codCategoryKeywords: { type: String, default: '' },
-  codExactQty: { type: Number, default: 0, min: 0 },
-  codCartOnlyMatching: { type: Boolean, default: false }
+  codExactQty: { type: Number, default: 0, min: 0 }
 });
 
 const DefaultRuleSchema = new mongoose.Schema(ruleFields(), { _id: false });
@@ -44,6 +67,10 @@ const SettingsSchema = new mongoose.Schema(
     instagram: { type: String, default: 'Lakshmibala_Clothing Store' },
     address: { type: String, default: 'Sivakasi, Virudhunagar Dt, Tamil Nadu' },
 
+    // Courier partner shown at checkout under the selected payment method.
+    onlineCourier: { type: String, default: 'ST Courier' },
+    codCourier: { type: String, default: 'Postal Courier' },
+
     // LEGACY — no longer read at checkout. Only used once, to migrate an
     // existing settings document into `defaultRule` (see getShippingSettings).
     shippingFee: { type: Number, default: 49 },
@@ -65,9 +92,8 @@ const SettingsSchema = new mongoose.Schema(
 );
 
 // In development, drop the cached model so schema edits (like the new
-// defaultRule / shippingRules / discountRules fields) take effect after a
-// hot reload. Without this, Mongoose keeps serving the OLD schema and
-// silently drops the new fields.
+// tier / courier fields) take effect after a hot reload. Without this,
+// Mongoose keeps serving the OLD schema and silently drops the new fields.
 if (process.env.NODE_ENV !== 'production' && mongoose.models.Settings) {
   delete mongoose.models.Settings;
 }

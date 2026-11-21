@@ -2,40 +2,61 @@ export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import { dbConnect } from '@/lib/mongodb';
-import { getShippingSettings, getCodStatus } from '@/lib/shipping';
-import { resolveRule, computeShipping } from '@/lib/shippingConfig';
+import { getShippingSettings, buildShippingQuote } from '@/lib/shipping';
+import { resolveRule, INDIAN_STATES } from '@/lib/shippingConfig';
 
-// Used by the checkout page to PREVIEW shipping + COD for the chosen state.
-// This is display-only: /api/payment/create-order recomputes everything
-// server-side and is the source of truth.
+// Display-only quote for the checkout page. The authoritative calculation is
+// repeated server-side in /api/payment/create-order, so nothing sent here can
+// change what the customer is actually charged.
+//
+// Response:
+// {
+//   forState, quantity, freeShippingAbove,
+//   online: { shippingFee, courier },
+//   cod:    { available, reason, shippingFee, courier }
+// }
 export async function POST(req) {
   try {
+    await dbConnect();
     const { items, state, subtotal } = await req.json();
 
     if (!state) {
       return NextResponse.json({ error: 'Select a state to calculate shipping' }, { status: 400 });
     }
 
-    await dbConnect();
-    const settings = await getShippingSettings();
-    const rule = resolveRule(settings, state);
+    const cartItems = Array.isArray(items) ? items : [];
+    if (cartItems.length > 100) {
+      return NextResponse.json({ error: 'Invalid cart' }, { status: 400 });
+    }
 
-    const shippingFee = computeShipping(rule, Number(subtotal) || 0);
-    const lines = (Array.isArray(items) ? items : []).map((i) => ({
+    const stateName = INDIAN_STATES.find((s) => s === state);
+    if (!stateName) {
+      return NextResponse.json({ error: 'Please select a valid state' }, { status: 400 });
+    }
+
+    const settings = await getShippingSettings();
+    const rule = resolveRule(settings, stateName);
+
+    const lines = cartItems.map((i) => ({
       productId: i.productId,
       comboId: i.comboId,
       isCombo: i.isCombo === true,
       qty: i.qty
     }));
-    const cod = await getCodStatus(rule, lines, rule.matchedState || state);
 
-    return NextResponse.json({
-      shippingFee,
-      freeShippingAbove: rule.freeShippingAbove,
-      cod
+    const amountAfterDiscount = Math.max(0, Number(subtotal) || 0);
+
+    const quote = await buildShippingQuote({
+      settings,
+      rule,
+      lines,
+      state: stateName,
+      amountAfterDiscount
     });
+
+    return NextResponse.json(quote);
   } catch (err) {
-    console.error('Shipping quote error:', err);
+    console.error('shipping quote failed:', err);
     return NextResponse.json({ error: 'Could not calculate shipping' }, { status: 500 });
   }
 }
