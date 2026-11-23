@@ -731,7 +731,7 @@ export default function CheckoutPage() {
             )}
 
             {/* Coupon */}
-            <div className="flex gap-2 mt-3">
+            {/* <div className="flex gap-2 mt-3">
               <input
                 className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-magenta/40 min-w-0"
                 placeholder="Coupon code"
@@ -740,7 +740,7 @@ export default function CheckoutPage() {
                 onKeyDown={(e) => e.key === 'Enter' && applyCoupon()}
               />
               <button onClick={applyCoupon} className="btn-outline px-4 text-sm shrink-0">Apply</button>
-            </div>
+            </div> */}
             {discount > 0 && usingAutoDiscount && (
               <p className="text-xs text-brand-ink/50 mt-1">
                 Your automatic discount is bigger, so it&apos;s the one applied instead of this coupon.
