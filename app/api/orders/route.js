@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { dbConnect } from '@/lib/mongodb';
 import Order from '@/models/Order';
 import { requireAdmin } from '@/lib/apiAuth';
-import { VISIBLE_ORDER_FILTER } from '@/lib/orderFilters';
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -12,11 +11,10 @@ export const GET = requireAdmin(async (req) => {
   const status = searchParams.get('status');
   const search = (searchParams.get('search') || '').trim();
 
-  // NOTE: any `paymentStatus` query param is deliberately ignored, so an old
-  // client can't hide COD orders. Visibility is decided only by VISIBLE_ORDER_FILTER.
-  // Every clause goes into $and so the payment $or and the search $or
-  // never overwrite each other.
-  const and = [VISIBLE_ORDER_FILTER];
+  // The Orders list shows EVERY order (online paid/pending/failed and all COD);
+  // the payment badge tells the admin which is which. Every clause goes into
+  // $and so the status filter and the search $or never overwrite each other.
+  const and = [];
 
   if (status) and.push({ status });
 
@@ -52,7 +50,7 @@ export const GET = requireAdmin(async (req) => {
     and.push({ $or: conditions });
   }
 
-  const query = { $and: and };
+  const query = and.length ? { $and: and } : {};
 
   const page = Math.max(1, Number(searchParams.get('page') || 1) || 1);
   const limit = Math.min(100, Math.max(1, Number(searchParams.get('limit') || 20) || 20));

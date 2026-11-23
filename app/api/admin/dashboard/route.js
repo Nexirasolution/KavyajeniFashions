@@ -50,6 +50,12 @@ export const GET = requireAdmin(async () => {
   // top selling products
   const topProducts = await Product.find({ isActive: true }).sort({ soldCount: -1 }).limit(5).select('name soldCount basePrice');
 
+  // latest orders of any payment type, so the dashboard can show payment status
+  const recentOrders = await Order.find({})
+    .sort({ createdAt: -1 })
+    .limit(8)
+    .select('orderNumber customer.name total status paymentMethod paymentStatus createdAt');
+
   return NextResponse.json({
     today: { sales: sum(todayOrders), orders: todayOrders.length },
     week: { sales: sum(weekOrders), orders: weekOrders.length },
@@ -59,6 +65,7 @@ export const GET = requireAdmin(async () => {
     pendingOrders,
     lowStock,
     trend,
-    topProducts
+    topProducts,
+    recentOrders
   });
 });
