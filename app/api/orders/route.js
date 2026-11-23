@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { dbConnect } from '@/lib/mongodb';
 import Order from '@/models/Order';
 import { requireAdmin } from '@/lib/apiAuth';
+import { VISIBLE_ORDER_FILTER } from '@/lib/orderFilters';
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -9,17 +10,15 @@ export const GET = requireAdmin(async (req) => {
   await dbConnect();
   const { searchParams } = new URL(req.url);
   const status = searchParams.get('status');
-  const paymentStatus = searchParams.get('paymentStatus');
   const search = (searchParams.get('search') || '').trim();
-  const query = {};
 
-  if (status) query.status = status;
+  // NOTE: any `paymentStatus` query param is deliberately ignored, so an old
+  // client can't hide COD orders. Visibility is decided only by VISIBLE_ORDER_FILTER.
+  // Every clause goes into $and so the payment $or and the search $or
+  // never overwrite each other.
+  const and = [VISIBLE_ORDER_FILTER];
 
-  if (paymentStatus) {
-    // supports a single value or a comma-separated list, e.g. "paid,cod_fee_paid"
-    const statuses = paymentStatus.split(',').map((s) => s.trim()).filter(Boolean);
-    query.paymentStatus = statuses.length > 1 ? { $in: statuses } : statuses[0];
-  }
+  if (status) and.push({ status });
 
   if (search) {
     const rx = { $regex: escapeRegex(search), $options: 'i' };
@@ -41,7 +40,6 @@ export const GET = requireAdmin(async (req) => {
 
     // Phone: match regardless of how it was typed OR how it's stored.
     // Typing "98765 43210" or "9876543210" matches a stored "+91 98765-43210".
-    // Allow optional non-digit characters between each digit of the search.
     const digits = search.replace(/\D/g, '');
     if (digits.length >= 3) {
       conditions.push({
@@ -51,8 +49,10 @@ export const GET = requireAdmin(async (req) => {
       });
     }
 
-    query.$or = conditions;
+    and.push({ $or: conditions });
   }
+
+  const query = { $and: and };
 
   const page = Math.max(1, Number(searchParams.get('page') || 1) || 1);
   const limit = Math.min(100, Math.max(1, Number(searchParams.get('limit') || 20) || 20));

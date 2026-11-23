@@ -1,126 +1,229 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import Link from 'next/link';
 import { formatINR } from '@/lib/utils';
-import { IndianRupee, ShoppingCart, Package, AlertTriangle } from 'lucide-react';
 
-function StatCard({ icon: Icon, label, value, sub, color }) {
-  return (
-    <div className="card-soft p-4 flex items-center gap-3">
-      <div className={`p-3 rounded-xl ${color}`}>
-        <Icon size={20} className="text-white" />
-      </div>
-      <div>
-        <p className="text-xs text-brand-ink/50">{label}</p>
-        <p className="font-bold text-lg text-brand-ink">{value}</p>
-        {sub && <p className="text-xs text-brand-ink/40">{sub}</p>}
-      </div>
-    </div>
-  );
-}
+const STATUSES = ['placed', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled', 'returned'];
+const LIMIT = 20;
 
-const EMPTY_PERIOD = { sales: 0, orders: 0 };
+// Turns (paymentMethod, paymentStatus) into a short, readable label + color.
+// A COD order's paymentStatus tracks the online-paid HANDLING FEE only —
+// never the whole order — so it gets its own wording rather than reusing
+// "Paid"/"Pending" as-is.
+function paymentDisplay(order) {
+  const { paymentMethod, paymentStatus } = order;
 
-export default function AdminDashboard() {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
-
-  async function load() {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch('/api/admin/dashboard');
-      const json = await res.json().catch(() => null);
-      // Without this check, an error response like { error: 'Unauthorized' }
-      // was stored as `data` and crashed on data.today.sales.
-      if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
-      if (!json || typeof json !== 'object') throw new Error('Unexpected response from server');
-      setData(json);
-    } catch (err) {
-      setError(err.message || 'Could not load dashboard');
-    } finally {
-      setLoading(false);
+  if (paymentMethod === 'cod') {
+    switch (paymentStatus) {
+      case 'cod_fee_paid':
+        return { label: 'COD · fee paid online', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+      case 'cod_fee_pending':
+        return { label: 'COD · fee pending', cls: 'bg-amber-50 text-amber-700 border-amber-200' };
+      case 'failed':
+        return { label: 'COD · fee payment failed', cls: 'bg-red-50 text-red-700 border-red-200' };
+      case 'pending':
+      default:
+        // No online fee for this order — the whole amount is cash on delivery.
+        return { label: 'COD', cls: 'bg-brand-ink/5 text-brand-ink/70 border-brand-ink/10' };
     }
   }
 
+  switch (paymentStatus) {
+    case 'paid':
+      return { label: 'Paid', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+    case 'pending':
+      return { label: 'Pending', cls: 'bg-amber-50 text-amber-700 border-amber-200' };
+    case 'failed':
+      return { label: 'Failed', cls: 'bg-red-50 text-red-700 border-red-200' };
+    case 'refunded':
+      return { label: 'Refunded', cls: 'bg-brand-ink/5 text-brand-ink/70 border-brand-ink/10' };
+    default:
+      return { label: paymentStatus || '—', cls: 'bg-brand-ink/5 text-brand-ink/70 border-brand-ink/10' };
+  }
+}
+
+function PaymentBadge({ order }) {
+  const { label, cls } = paymentDisplay(order);
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
+// "Product A, Product B +2 more" — shows admins why a product search matched.
+function itemsSummary(items = []) {
+  const names = items.map((i) => i.name).filter(Boolean);
+  if (names.length === 0) return '';
+  const shown = names.slice(0, 2).join(', ');
+  return names.length > 2 ? `${shown} +${names.length - 2} more` : shown;
+}
+
+export default function AdminOrdersPage() {
+  const [orders, setOrders] = useState([]);
+  const [status, setStatus] = useState('');
+  const [search, setSearch] = useState(''); // what's typed in the box
+  const [query, setQuery] = useState('');   // what's actually applied
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
+    let cancelled = false; // ignore stale responses if filters change quickly
+
+    async function load() {
+      setLoading(true);
+      try {
+        // The API already limits results to online-paid orders + all COD orders.
+        const params = new URLSearchParams({
+          page: String(page),
+          limit: String(LIMIT),
+        });
+        if (status) params.set('status', status);
+        if (query) params.set('search', query);
+        const res = await fetch(`/api/orders?${params.toString()}`);
+        const data = await res.json();
+        if (cancelled) return;
+        setOrders(data.orders || []);
+        setTotal(data.total || 0);
+        setPages(data.pages || 1);
+      } catch (err) {
+        if (!cancelled) {
+          setOrders([]);
+          setTotal(0);
+          setPages(1);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
     load();
-  }, []);
+    return () => { cancelled = true; };
+  }, [status, query, page]);
 
-  if (loading) return <p className="text-brand-ink/50">Loading dashboard...</p>;
-
-  if (error) {
-    return (
-      <div className="card-soft p-5">
-        <p className="text-sm text-red-600 mb-3">{error}</p>
-        <button onClick={load} className="btn-outline text-sm">Try again</button>
-      </div>
-    );
+  function applySearch() {
+    setPage(1);
+    setQuery(search.trim());
   }
 
-  // Fall back to empty values so a missing key never crashes the page
-  const today = data.today ?? EMPTY_PERIOD;
-  const week = data.week ?? EMPTY_PERIOD;
-  const month = data.month ?? EMPTY_PERIOD;
-  const trend = data.trend ?? [];
-  const topProducts = data.topProducts ?? [];
-  const lowStock = data.lowStock ?? [];
+  function clearSearch() {
+    setSearch('');
+    setQuery('');
+    setPage(1);
+  }
+
+  const from = total === 0 ? 0 : (page - 1) * LIMIT + 1;
+  const to = Math.min(page * LIMIT, total);
 
   return (
     <div>
-      <h1 className="font-display text-2xl font-bold text-brand-magenta mb-5">Dashboard</h1>
+      <h1 className="font-display text-2xl font-bold text-brand-magenta mb-5">Orders</h1>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        <StatCard icon={IndianRupee} label="Today's Sales" value={formatINR(today.sales ?? 0)} sub={`${today.orders ?? 0} orders`} color="bg-brand-pink" />
-        <StatCard icon={IndianRupee} label="Weekly Sales" value={formatINR(week.sales ?? 0)} sub={`${week.orders ?? 0} orders`} color="bg-brand-magenta" />
-        <StatCard icon={IndianRupee} label="Monthly Sales" value={formatINR(month.sales ?? 0)} sub={`${month.orders ?? 0} orders`} color="bg-brand-gold" />
-        <StatCard icon={ShoppingCart} label="Pending Orders" value={data.pendingOrders ?? 0} sub="Need action" color="bg-brand-green" />
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input
+          placeholder="Search by order #, tracking ID, customer name, phone, or product"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && applySearch()}
+          className="border rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px]"
+        />
+        <select
+          value={status}
+          onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+          className="border rounded-lg px-3 py-2 text-sm"
+        >
+          <option value="">All Status</option>
+          {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button onClick={applySearch} className="btn-outline text-sm">Search</button>
+        {(search || query) && (
+          <button onClick={clearSearch} className="btn-outline text-sm">Clear</button>
+        )}
       </div>
 
-      <div className="card-soft p-5 mb-6">
-        <h2 className="font-semibold mb-4">Sales Trend (Last 14 Days)</h2>
-        <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={trend}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-            <XAxis dataKey="date" fontSize={12} />
-            <YAxis fontSize={12} />
-            <Tooltip formatter={(v) => formatINR(v)} />
-            <Line type="monotone" dataKey="sales" stroke="#E91E8C" strokeWidth={2.5} dot={false} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
+      {loading ? (
+        <p className="text-brand-ink/50">Loading...</p>
+      ) : (
+        <div className="card-soft overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left border-b border-brand-ink/10 text-brand-ink/50">
+                <th className="p-3">Order #</th>
+                <th className="p-3">Customer</th>
+                <th className="p-3">Total</th>
+                <th className="p-3">Payment</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Date</th>
+                <th className="p-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map((o) => {
+                const tracking = o.courier?.trackingId || o.courier?.awbNumber;
+                const products = itemsSummary(o.items);
+                return (
+                  <tr key={o._id} className="border-b border-brand-ink/5 align-top">
+                    <td className="p-3">
+                      <span className="font-medium">{o.orderNumber}</span>
+                      {tracking && (
+                        <div className="text-xs text-brand-ink/50 mt-0.5">Track: {tracking}</div>
+                      )}
+                      {products && (
+                        <div className="text-xs text-brand-ink/50 mt-0.5 max-w-[240px] truncate" title={products}>
+                          {products}
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      {o.customer?.name}
+                      <br />
+                      <span className="text-xs text-brand-ink/50">{o.customer?.phone}</span>
+                    </td>
+                    <td className="p-3">{formatINR(o.total)}</td>
+                    <td className="p-3"><PaymentBadge order={o} /></td>
+                    <td className="p-3 capitalize">{o.status}</td>
+                    <td className="p-3 text-xs text-brand-ink/50">
+                      {new Date(o.createdAt).toLocaleDateString('en-IN')}
+                    </td>
+                    <td className="p-3">
+                      <Link href={`/admin/orders/${o._id}`} className="text-brand-magenta font-medium">View</Link>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {orders.length === 0 && <p className="text-center text-brand-ink/40 py-10">No orders found.</p>}
 
-      <div className="grid sm:grid-cols-2 gap-6">
-        <div className="card-soft p-5">
-          <h2 className="font-semibold mb-3 flex items-center gap-2"><Package size={18} /> Top Selling Products</h2>
-          {topProducts.length === 0 ? (
-            <p className="text-sm text-brand-ink/50">No sales yet.</p>
-          ) : (
-            <ul className="space-y-2">
-              {topProducts.map((p) => (
-                <li key={p._id} className="flex justify-between text-sm">
-                  <span>{p.name}</span>
-                  <span className="text-brand-magenta font-medium">{p.soldCount} sold</span>
-                </li>
-              ))}
-            </ul>
+          {total > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3 border-t border-brand-ink/10 text-sm">
+              <span className="text-brand-ink/50">
+                Showing {from}–{to} of {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="btn-outline text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="text-brand-ink/70">Page {page} of {pages}</span>
+                <button
+                  onClick={() => setPage((p) => Math.min(pages, p + 1))}
+                  disabled={page >= pages}
+                  className="btn-outline text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           )}
         </div>
-        <div className="card-soft p-5">
-          <h2 className="font-semibold mb-3 flex items-center gap-2"><AlertTriangle size={18} className="text-brand-gold" /> Low Stock Alert</h2>
-          {lowStock.length === 0 ? (
-            <p className="text-sm text-brand-ink/50">All good — no low stock items.</p>
-          ) : (
-            <ul className="space-y-2">
-              {lowStock.map((p) => (
-                <li key={p._id} className="text-sm">{p.name}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
