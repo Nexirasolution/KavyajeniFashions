@@ -13,6 +13,7 @@ import {
 import { releaseExpiredOrders } from '@/lib/releaseExpiredOrders';
 import { getShippingSettings, buildShippingQuote, orderItemsToLines } from '@/lib/shipping';
 import { resolveRule, INDIAN_STATES } from '@/lib/shippingConfig';
+import { computeBestDiscount, getTotalQty } from '@/lib/discountConfig';
 
 const RESERVATION_WINDOW_MS = 10 * 60 * 1000; // 10 min to complete an ONLINE payment, then stock is released
 
@@ -180,10 +181,31 @@ export async function POST(req) {
     };
 
     try {
-      // Recompute discount + shipping server-side — never trust a client total.
+      // ── Discount (computed server-side — never trust a client total) ──
+      //
+      // 1) Manual coupon (if any code was sent).
       const couponResult = await applyCouponToSubtotal(couponCode, subtotal);
-      const discount = couponResult.discount;
+      const couponDiscount = couponResult.discount || 0;
       appliedCoupon = couponResult.appliedCoupon;
+
+      // 2) Automatic tiered discount from the admin "Discounts" settings,
+      //    worked out from the items that were actually reserved.
+      const auto = computeBestDiscount(settings.discountRules, {
+        subtotal,
+        totalQty: getTotalQty(orderItems)
+      });
+      const autoDiscountAmount = auto?.discountAmount || 0;
+
+      // 3) Same rule as the checkout page: the bigger one wins, no stacking.
+      const usedAuto = autoDiscountAmount > couponDiscount;
+      const discount = Math.min(subtotal, Math.max(couponDiscount, autoDiscountAmount));
+
+      // If the coupon lost, give its use back so it isn't burned for nothing.
+      if (usedAuto && appliedCoupon) {
+        await releaseCoupon(appliedCoupon);
+        appliedCoupon = '';
+      }
+
       const amountAfterDiscount = subtotal - discount;
 
       // Shipping + COD eligibility are worked out from the items that were
@@ -244,13 +266,14 @@ export async function POST(req) {
           dbOrderId: dbOrder._id,
           orderNumber: dbOrder.orderNumber,
           total,
+          discount,
           shippingFee,
           deliveryPartner,
           cashDue: total
         });
       }
 
-      // ── Online payment: charge the full total on Razorpay ──
+      // ── Online payment: charge the full (discounted) total on Razorpay ──
       let rzpOrder;
       try {
         rzpOrder = await razorpay.orders.create({
@@ -272,6 +295,7 @@ export async function POST(req) {
         keyId: process.env.RAZORPAY_KEY_ID,
         dbOrderId: dbOrder._id,
         total,
+        discount,
         shippingFee,
         deliveryPartner
       });
