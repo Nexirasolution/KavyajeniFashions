@@ -9,7 +9,7 @@ const BannerSchema = new mongoose.Schema(
     link: { type: String, default: '' },
     buttonText: { type: String, default: 'Shop Now' },
     sortOrder: { type: Number, default: 0 },
-    isActive: { type: Boolean, default: true }
+    isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

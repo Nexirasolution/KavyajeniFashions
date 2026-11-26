@@ -9,19 +9,30 @@ const emptyForm = {
   buttonText: 'Shop Now', sortOrder: 0, isActive: true,
 };
 
+// Reads the server's error message if there is one
+async function errorFrom(res, fallback) {
+  const data = await res.json().catch(() => ({}));
+  return data.error || `${fallback} (${res.status})`;
+}
+
 export default function AdminBannersPage() {
   const [banners, setBanners] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState('');
   const [editingId, setEditingId] = useState(null);
   const fileRef = useRef();
 
   async function load() {
-    const res = await fetch('/api/banners?all=true');
-    const data = await res.json();
-    setBanners(data.banners || []);
+    try {
+      const res = await fetch('/api/banners?all=true', { cache: 'no-store' });
+      const data = await res.json();
+      setBanners(data.banners || []);
+    } catch {
+      toast.error('Failed to load banners');
+    }
   }
   useEffect(() => { load(); }, []);
 
@@ -47,6 +58,7 @@ export default function AdminBannersPage() {
       setPreview('');
     } finally {
       setUploading(false);
+      if (fileRef.current) fileRef.current.value = ''; // allow re-picking same file
     }
   }
 
@@ -70,29 +82,7 @@ export default function AdminBannersPage() {
     });
     setPreview(b.image || '');
     setShowForm(true);
-  }
-
-  async function submit(e) {
-    e.preventDefault();
-    if (!form.image) { toast.error('Please upload an image'); return; }
-
-    const isEditing = Boolean(editingId);
-    const res = await fetch(
-      isEditing ? `/api/banners/${editingId}` : '/api/banners',
-      {
-        method: isEditing ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      }
-    );
-
-    if (res.ok) {
-      toast.success(isEditing ? 'Banner updated' : 'Banner added');
-      closeForm();
-      load();
-    } else {
-      toast.error(isEditing ? 'Failed to update banner' : 'Failed to add banner');
-    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function closeForm() {
@@ -102,19 +92,70 @@ export default function AdminBannersPage() {
     setPreview('');
   }
 
+  async function submit(e) {
+    e.preventDefault();
+    if (!form.image) { toast.error('Please upload an image'); return; }
+
+    const isEditing = Boolean(editingId);
+    setSaving(true);
+    try {
+      const res = await fetch(
+        isEditing ? `/api/banners/${editingId}` : '/api/banners',
+        {
+          method: isEditing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form),
+        }
+      );
+
+      if (!res.ok) {
+        toast.error(await errorFrom(res, isEditing ? 'Failed to update banner' : 'Failed to add banner'));
+        return;
+      }
+
+      toast.success(isEditing ? 'Banner updated' : 'Banner added');
+      closeForm();
+      load();
+    } catch {
+      toast.error('Network error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function toggleActive(b) {
-    await fetch(`/api/banners/${b._id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isActive: !b.isActive }),
-    });
-    load();
+    const next = !b.isActive;
+
+    // optimistic update
+    setBanners((list) => list.map((x) => (x._id === b._id ? { ...x, isActive: next } : x)));
+
+    try {
+      const res = await fetch(`/api/banners/${b._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive: next }),
+      });
+      if (!res.ok) throw new Error(await errorFrom(res, 'Failed to update banner'));
+      toast.success(next ? 'Banner activated' : 'Banner deactivated');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      load(); // always resync with the server
+    }
   }
 
   async function remove(id) {
     if (!confirm('Delete this banner?')) return;
-    await fetch(`/api/banners/${id}`, { method: 'DELETE' });
-    load();
+    try {
+      const res = await fetch(`/api/banners/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await errorFrom(res, 'Failed to delete banner'));
+      toast.success('Banner deleted');
+      setBanners((list) => list.filter((x) => x._id !== id));
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      load();
+    }
   }
 
   return (
@@ -167,8 +208,8 @@ export default function AdminBannersPage() {
             <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} /> Active
           </label>
 
-          <button className="btn-primary text-sm" disabled={uploading}>
-            {uploading ? 'Uploading…' : editingId ? 'Save Changes' : 'Create'}
+          <button type="submit" className="btn-primary text-sm" disabled={uploading || saving}>
+            {uploading ? 'Uploading…' : saving ? 'Saving…' : editingId ? 'Save Changes' : 'Create'}
           </button>
         </form>
       )}
@@ -176,22 +217,25 @@ export default function AdminBannersPage() {
       <div className="grid sm:grid-cols-2 gap-4">
         {banners.map((b) => (
           <div key={b._id} className="card-soft overflow-hidden">
-            <img src={b.image} alt={b.title} className="w-full h-32 object-cover" />
+            <img src={b.image} alt={b.title || 'banner'} className="w-full h-32 object-cover" />
             <div className="p-3 flex items-center justify-between">
               <div>
                 <p className="font-medium text-sm">{b.title || '(no title)'}</p>
                 <p className="text-xs text-brand-ink/50">Order: {b.sortOrder}</p>
               </div>
               <div className="flex items-center gap-2">
-                <label className="text-xs flex items-center gap-1">
-                  <input type="checkbox" checked={b.isActive} onChange={() => toggleActive(b)} /> Active
+                <label className="text-xs flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" checked={!!b.isActive} onChange={() => toggleActive(b)} /> Active
                 </label>
-                <button onClick={() => openEdit(b)} className="text-brand-ink/60 hover:text-brand-magenta"><Pencil size={16} /></button>
-                <button onClick={() => remove(b._id)} className="text-brand-magenta"><Trash2 size={16} /></button>
+                <button type="button" onClick={() => openEdit(b)} className="text-brand-ink/60 hover:text-brand-magenta"><Pencil size={16} /></button>
+                <button type="button" onClick={() => remove(b._id)} className="text-brand-magenta"><Trash2 size={16} /></button>
               </div>
             </div>
           </div>
         ))}
+        {banners.length === 0 && (
+          <p className="text-sm text-brand-ink/50">No banners yet.</p>
+        )}
       </div>
     </div>
   );
